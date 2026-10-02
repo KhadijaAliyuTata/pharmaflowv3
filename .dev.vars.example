@@ -1,0 +1,5 @@
+# Secrets for `wrangler dev` / `vite dev`. Copy to `.dev.vars` and fill in.
+# .dev.vars is gitignored. Never commit real keys.
+
+# Google Gemini — NAFDAC verification, AI business chat, prescription OCR.
+GEMINI_API_KEY=""
