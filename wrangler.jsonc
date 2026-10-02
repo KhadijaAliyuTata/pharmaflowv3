@@ -1,0 +1,48 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "pharmaflow",
+
+  // Keep this current. Older dates change what APIs are available.
+  "compatibility_date": "2026-09-28",
+
+  // Required. Without it, any dependency that touches `node:crypto`, `buffer`
+  // or `path` fails at runtime with a confusing module-resolution error.
+  "compatibility_flags": ["nodejs_compat"],
+
+  // TanStack Start's server entrypoint. The Vite plugin resolves this and emits
+  // a deploy-ready config at dist/server/wrangler.json during `vite build`.
+  "main": "@tanstack/react-start/server-entry",
+
+  "observability": {
+    "enabled": true
+  }
+
+  // ---------------------------------------------------------------------------
+  // Not wired yet. Uncomment and run the wrangler command once the account
+  // exists. Left as documentation rather than empty arrays, because an empty
+  // binding is silently ignored and looks like it is configured.
+  //
+  //   bunx wrangler d1 create pharmaflow      # then paste the id below
+  //   bunx wrangler secret put GEMINI_API_KEY
+  //
+  // "vars" are public and end up in the client bundle. Anything secret goes in
+  // `wrangler secret put`, never here.
+  //
+  // vars: {
+  //   PUBLIC_SUPABASE_URL: "https://xxxx.supabase.co",
+  //   PUBLIC_SUPABASE_ANON_KEY: "",
+  //   PUBLIC_DEMO_MODE: "false"
+  // },
+  //
+  // d1_databases: [
+  //   { binding = "DB", database_name = "pharmaflow", database_id = "<paste>" }
+  // ],
+  //
+  // For Postgres over the network instead of D1, Hyperdrive keeps the
+  // connection pooled across requests:
+  //
+  // hyperdrive: [
+  //   { binding = "HYPERDRIVE", id = "<paste>" }
+  // ]
+  // ---------------------------------------------------------------------------
+}
