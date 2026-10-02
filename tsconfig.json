@@ -1,7 +1,11 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2023",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
@@ -14,13 +18,28 @@
     "verbatimModuleSyntax": true,
     "forceConsistentCasingInFileNames": true,
     "noUncheckedIndexedAccess": true,
-    "types": ["vite/client"],
+    "types": [
+      "vite/client"
+    ],
     "baseUrl": ".",
     "paths": {
-      "cn": ["./src/lib/cn.ts"],
-      "~/*": ["./src/*"]
+      "cn": [
+        "./src/lib/cn.ts"
+      ],
+      "~/*": [
+        "./src/*"
+      ]
     }
   },
-  "include": ["src", "vite.config.ts", "worker-configuration.d.ts"],
-  "exclude": ["node_modules", "dist", ".output", ".wrangler"]
+  "include": [
+    "src",
+    "vite.config.ts",
+    "worker-configuration.d.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    ".output",
+    ".wrangler"
+  ]
 }
