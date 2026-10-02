@@ -13,6 +13,12 @@ import { fileURLToPath } from 'node:url';
  *   4. tailwindcss()
  */
 export default defineConfig({
+  // Vite only exposes env vars matching `envPrefix` to client code, and the
+  // default is `VITE_`. This project reads `PUBLIC_SUPABASE_*` from
+  // `import.meta.env` (see src/lib/supabase.ts), so without this the values are
+  // stripped at build time and the app silently falls back to demo mode.
+  envPrefix: ['VITE_', 'PUBLIC_'],
+
   plugins: [
     cloudflare({ viteEnvironment: { name: 'ssr' } }),
     tanstackStart(),

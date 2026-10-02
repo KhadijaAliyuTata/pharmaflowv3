@@ -78,7 +78,7 @@ export function StatTile({
         : !higherIsBetter;
 
   return (
-    <Card className="gap-0 py-0">
+    <Card className="gap-0" size="sm">
       <CardHeader className="flex-row items-center justify-between gap-2 space-y-0 pb-2">
         <CardTitle className="text-xs font-medium text-muted-foreground">{label}</CardTitle>
         {icon && (

@@ -4,16 +4,15 @@ import {
   ArrowRight,
   Bell,
   Banknote,
-  Clock,
+  ChevronRight,
   Package,
-  PackageX,
   TrendingUp,
   TriangleAlert,
   Users,
 } from 'lucide-react';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '~/components/ui/card';
+import { Card, CardContent, CardHeader } from '~/components/ui/card';
 import {
   Money,
   PageHeader,
@@ -66,50 +65,31 @@ function Dashboard() {
 
       {/* What is broken, before what is fine. */}
       {(snapshot.pendingPricing > 0 || snapshot.outOfStockCount > 0 || urgent.length > 0) && (
-        <Card className="border-warning/40 bg-warning-subtle">
-          <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2 text-sm">
-              <TriangleAlert className="size-4" />
-              Needs attention
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-x-1 gap-y-1 rounded-lg border border-warning/40 bg-warning/10 px-2 py-2">
+          <p className="flex items-center gap-2 px-2 text-sm font-medium text-warning-foreground">
+            <TriangleAlert className="size-4 shrink-0" />
+            Needs attention
+          </p>
+          <div className="flex flex-wrap items-center gap-x-1 gap-y-1">
             {snapshot.pendingPricing > 0 && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="bg-background"
-                render={<Link to="/pricing" />}
-              >
-                <Clock className="size-4" />
-                {snapshot.pendingPricing} receipt{snapshot.pendingPricing > 1 ? 's' : ''} awaiting
-                pricing
-              </Button>
+              <AttentionItem
+                to="/pricing"
+                count={snapshot.pendingPricing}
+                label={snapshot.pendingPricing === 1 ? 'receipt awaiting pricing' : 'receipts awaiting pricing'}
+              />
             )}
             {snapshot.outOfStockCount > 0 && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="bg-background"
-                render={<Link to="/inventory" />}
-              >
-                <PackageX className="size-4" />
-                {snapshot.outOfStockCount} out of stock
-              </Button>
+              <AttentionItem
+                to="/inventory"
+                count={snapshot.outOfStockCount}
+                label={snapshot.outOfStockCount === 1 ? 'product out of stock' : 'products out of stock'}
+              />
             )}
             {urgent.length > 0 && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="bg-background"
-                render={<Link to="/stock-intelligence" />}
-              >
-                <TrendingUp className="size-4" />
-                {urgent.length} running out before restock can arrive
-              </Button>
+              <AttentionItem to="/stock-intelligence" count={urgent.length} label="at restock risk" />
             )}
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       )}
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -351,6 +331,31 @@ function stockStatusFor(daysRemaining: number) {
   if (daysRemaining < 0) return 'expired' as const;
   if (daysRemaining <= 30) return 'expiring_soon' as const;
   return 'low_stock' as const;
+}
+
+function AttentionItem({
+  to,
+  count,
+  label,
+}: {
+  to: string;
+  count: number;
+  label: string;
+}) {
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      className="h-auto gap-1.5 px-2 py-1 text-warning-foreground hover:bg-warning/20 hover:text-warning-foreground"
+      render={<Link to={to} />}
+    >
+      <span data-numeric className="tabular font-semibold">
+        {count}
+      </span>
+      {label}
+      <ChevronRight className="size-3.5 opacity-50" />
+    </Button>
+  );
 }
 
 function QuickStat({

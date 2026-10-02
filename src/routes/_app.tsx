@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Navigate, Outlet, createFileRoute, redirect } from '@tanstack/react-router';
 import { AppHeader } from '~/components/app-header';
 import { AppSidebar } from '~/components/app-sidebar';
 import { CommandMenu } from '~/components/command-menu';
 import { SidebarInset, SidebarProvider } from '~/components/ui/sidebar';
 import { Toaster } from '~/components/ui/sonner';
+import { useHotkeys } from '~/lib/use-hotkeys';
 import { peekSession, useSession } from '~/lib/session';
 
 /**
@@ -48,28 +49,11 @@ function AppLayout() {
   // the effect inside `useSession` and re-filters the nav.
   const role = user?.role ?? 'owner';
 
-  // ⌘K / Ctrl+K. Skipped while typing in a field so it does not hijack
-  // keyboard input mid-entry.
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key.toLowerCase() !== 'k' || !(event.metaKey || event.ctrlKey)) {
-        return;
-      }
-      const target = event.target as HTMLElement | null;
-      if (
-        target instanceof HTMLInputElement ||
-        target instanceof HTMLTextAreaElement ||
-        target?.isContentEditable
-      ) {
-        return;
-      }
-      event.preventDefault();
-      setCommandOpen((open) => !open);
-    };
-
-    document.addEventListener('keydown', onKeyDown);
-    return () => document.removeEventListener('keydown', onKeyDown);
-  }, []);
+  // ⌘K / Ctrl+K. The hook skips editable targets by default, so it does not
+  // hijack keyboard input mid-entry.
+  useHotkeys({
+    'mod+k': () => setCommandOpen((open) => !open),
+  });
 
   // Below the hooks on purpose: an early return above them is a conditional
   // hook, and React tears the whole route down when the session resolves.
