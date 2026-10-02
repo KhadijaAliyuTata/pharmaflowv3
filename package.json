@@ -10,9 +10,7 @@
     "deploy:watch": "wrangler deploy -c dist/server/wrangler.json",
     "cf-typegen": "wrangler types",
     "typecheck": "tsc --noEmit",
-    "check": "bun run typecheck && bun run build",
-    "db:push": "wrangler d1 migrations apply --local 2>/dev/null || echo 'D1 not configured yet'",
-    "db:studio": "supabase db studio"
+    "check": "bun run typecheck && bun run build"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",
