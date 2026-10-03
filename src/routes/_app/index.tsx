@@ -5,6 +5,7 @@ import {
   Bell,
   Banknote,
   ChevronRight,
+  Lock,
   Package,
   TrendingUp,
   TriangleAlert,
@@ -38,6 +39,7 @@ function Dashboard() {
   const recentSales = usePharmacy((state) => state.sales.slice(0, 5));
   const creditAccounts = usePharmacy((state) => state.creditAccounts);
   const suppliers = usePharmacy((state) => state.suppliers);
+  const isOwner = usePharmacy((state) => state.currentUser.role === 'owner');
 
   const overLimit = creditAccounts.filter(
     (a) => a.outstandingBalance > a.creditLimit,
@@ -93,28 +95,73 @@ function Dashboard() {
       )}
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {/* These tiles are financial, so they now follow the same rule as
+            /reports, /pricing, /expiry and /stock-intelligence: the owner sees
+            money, an attendant sees a count or a lock. The dashboard previously
+            rendered revenue, margin "after cost of goods", outstanding debt and
+            expiry value *at cost* to every role, handing an assistant the exact
+            figures the rest of the app declines to draw. */}
         <StatTile
-          label="Revenue today"
-          value={<Money value={snapshot.todayRevenue} compact className="" />}
-          hint={`${snapshot.todayTransactions} transaction${snapshot.todayTransactions === 1 ? '' : 's'}`}
+          label={isOwner ? 'Revenue today' : 'Sales today'}
+          value={
+            isOwner ? (
+              <Money value={snapshot.todayRevenue} compact className="" />
+            ) : (
+              snapshot.todayTransactions
+            )
+          }
+          hint={
+            isOwner
+              ? `${snapshot.todayTransactions} transaction${snapshot.todayTransactions === 1 ? '' : 's'}`
+              : 'Revenue is owner-only'
+          }
           icon={<Banknote className="size-4" />}
         />
         <StatTile
           label="Margin today"
-          value={<Money value={snapshot.todayMargin} compact className="" />}
-          hint="After cost of goods"
+          value={
+            isOwner ? (
+              <Money value={snapshot.todayMargin} compact className="" />
+            ) : (
+              <span className="inline-flex items-center gap-1.5 text-base text-muted-foreground">
+                <Lock className="size-4" />
+                Owner only
+              </span>
+            )
+          }
+          hint={isOwner ? 'After cost of goods' : 'Cost and margin are hidden'}
           icon={<TrendingUp className="size-4" />}
         />
         <StatTile
           label="Outstanding"
-          value={<Money value={snapshot.outstandingCredit} compact className="" />}
-          hint="Credit accounts and customer debt"
+          value={
+            isOwner ? (
+              <Money value={snapshot.outstandingCredit} compact className="" />
+            ) : (
+              overLimit.length
+            )
+          }
+          hint={
+            isOwner
+              ? 'Credit accounts and customer debt'
+              : `${overLimit.length} account${overLimit.length === 1 ? '' : 's'} over their limit`
+          }
           icon={<Users className="size-4" />}
         />
         <StatTile
           label="Expiring stock"
-          value={<Money value={snapshot.expiringValueAtCost} compact className="" />}
-          hint={`${snapshot.expiringCount} product${snapshot.expiringCount === 1 ? '' : 's'} within 90 days`}
+          value={
+            isOwner ? (
+              <Money value={snapshot.expiringValueAtCost} compact className="" />
+            ) : (
+              snapshot.expiringCount
+            )
+          }
+          hint={
+            isOwner
+              ? `${snapshot.expiringCount} product${snapshot.expiringCount === 1 ? '' : 's'} within 90 days`
+              : `${snapshot.expiringCount} product${snapshot.expiringCount === 1 ? '' : 's'} within 90 days`
+          }
           icon={<AlertTriangle className="size-4" />}
         />
       </div>
@@ -149,9 +196,13 @@ function Dashboard() {
                     </div>
                     <div className="shrink-0 text-right">
                       <StatusBadge status="out_of_stock" />
-                      <p data-numeric className="tabular mt-1 text-xs text-muted-foreground">
-                        <Money value={item.estimatedCost} compact />
-                      </p>
+                      {/* Estimated cost is a purchase price. /stock-intelligence
+                          gates the same figure behind `isOwner`. */}
+                      {isOwner && (
+                        <p data-numeric className="tabular mt-1 text-xs text-muted-foreground">
+                          <Money value={item.estimatedCost} compact />
+                        </p>
+                      )}
                     </div>
                   </li>
                 ))}

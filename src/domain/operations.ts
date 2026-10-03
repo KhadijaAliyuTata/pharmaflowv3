@@ -720,6 +720,12 @@ export function setSafetyLock(
   const medicine = state.medicines.find((m) => m.id === medicineId);
   if (!medicine) return fail('Product not found');
 
+  // Lifting a safety lock is as consequential as applying one, and neither is an
+  // attendant's decision. This check lives in the domain rather than the dialog
+  // because the dialog can be bypassed; the database enforces it again via
+  // `pf_guard_cost_write`'s sibling policies on `do_not_sell_locked_by`.
+  if (!canApprovePricing(user.role)) return fail('Only an owner can change a safety lock');
+
   if (locked) {
     if (!reason?.trim()) return fail('Give a reason for the lock');
   } else if (!medicine.doNotSell.active) {
@@ -761,6 +767,11 @@ export function setBatchRecall(
   reason?: string,
 ): Result<boolean> {
   const user = state.currentUser;
+
+  // Releasing a manufacturer recall puts suspect stock back on the shelf, so it
+  // is owner-only for the same reason as `setSafetyLock`.
+  if (!canApprovePricing(user.role)) return fail('Only an owner can change a batch recall');
+
   if (recalled && !reason?.trim()) return fail('Give a reason for the recall');
 
   let found = false;

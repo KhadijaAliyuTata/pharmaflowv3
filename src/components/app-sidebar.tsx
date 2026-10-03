@@ -7,11 +7,9 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuGroup,
-  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '~/components/ui/dropdown-menu';
 import {
@@ -64,6 +62,11 @@ export function AppSidebar({
   const role: Role = user?.role ?? 'owner';
   const name = userName ?? user?.name ?? 'Signed out';
   const sections = sectionsForRole(role);
+
+  const onSignOut = () => {
+    signOut();
+    void navigate({ to: '/login' });
+  };
 
   return (
     <Sidebar collapsible="offcanvas" {...props}>
@@ -130,73 +133,82 @@ export function AppSidebar({
       <SidebarFooter>
         <SidebarMenu>
           <SidebarMenuItem>
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                render={<SidebarMenuButton size="lg" className="w-full" />}
+            {/* Name and role sit next to a sign-out button rather than behind a
+                dropdown. Hiding "sign out" under the avatar meant it was invisible
+                on a phone — the sidebar is a closed sheet there — and invisible
+                whenever the sidebar is collapsed to icons. The dropdown is kept
+                for the demo-only role switch, which stays a menu. */}
+            <div className="flex items-center gap-1">
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  render={
+                    <SidebarMenuButton
+                      size="lg"
+                      className="min-w-0 flex-1 data-open:hover:bg-sidebar-accent"
+                    />
+                  }
+                >
+                  <Avatar className="size-7 rounded-md">
+                    <AvatarFallback className="text-xs">
+                      {initials(name)}
+                    </AvatarFallback>
+                  </Avatar>
+                  <div className="grid min-w-0 flex-1 text-left leading-tight">
+                    <span className="truncate text-sm font-medium">{name}</span>
+                    <span className="truncate text-xs text-muted-foreground">
+                      {ROLE_LABEL[role]}
+                    </span>
+                  </div>
+                </DropdownMenuTrigger>
+
+                <DropdownMenuContent align="start" side="top" className="w-56">
+                  {/* Every label and item sits inside a Group or a RadioGroup.
+                      Base UI throws on a `MenuGroupLabel` that has no group
+                      parent, and it takes the whole route down with it. */}
+                  <DropdownMenuGroup>
+                    <DropdownMenuLabel>{name}</DropdownMenuLabel>
+                  </DropdownMenuGroup>
+
+                  {/* Demo only. Real role changes are an audited action, not a
+                      self-service dropdown. */}
+                  <DropdownMenuGroup>
+                    <DropdownMenuLabel>Act as</DropdownMenuLabel>
+                    <DropdownMenuRadioGroup
+                      value={role}
+                      onValueChange={(value) => {
+                        // Only available in demo mode. With Supabase, a role is
+                        // a row in `profiles` guarded by RLS — a self-service
+                        // switch would let anyone promote themselves.
+                        const next: Role = value;
+                        switchRole(next);
+                        toast.success(`Viewing as ${ROLE_LABEL[next]}`);
+                      }}
+                    >
+                      {DEMO_ACCOUNTS.map((account) => (
+                        <DropdownMenuRadioItem key={account.role} value={account.role}>
+                          <UserRound />
+                          {ROLE_LABEL[account.role]}
+                        </DropdownMenuRadioItem>
+                      ))}
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
+
+              {/* Sits beside the name at every sidebar width. When the sidebar is
+                  collapsed to icons the text is hidden but the button remains,
+                  so signing out never becomes unreachable. */}
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8 shrink-0 text-muted-foreground hover:text-destructive-foreground hover:bg-destructive/10"
+                aria-label="Sign out"
+                title="Sign out"
+                onClick={onSignOut}
               >
-                <Avatar className="size-7 rounded-md">
-                  <AvatarFallback className="text-xs">
-                    {initials(name)}
-                  </AvatarFallback>
-                </Avatar>
-                <div className="grid flex-1 text-left leading-tight">
-                  <span className="truncate text-sm font-medium">{name}</span>
-                  <span className="truncate text-xs text-muted-foreground">
-                    {ROLE_LABEL[role]}
-                  </span>
-                </div>
-              </DropdownMenuTrigger>
-
-              <DropdownMenuContent align="start" side="top" className="w-56">
-                {/* Every label and item sits inside a Group or a RadioGroup.
-                    Base UI throws on a `MenuGroupLabel` that has no group
-                    parent, and it takes the whole route down with it. */}
-                <DropdownMenuGroup>
-                  <DropdownMenuLabel>{name}</DropdownMenuLabel>
-                </DropdownMenuGroup>
-
-                <DropdownMenuSeparator />
-
-                {/* Demo only. Real role changes are an audited action, not a
-                    self-service dropdown. */}
-                <DropdownMenuGroup>
-                  <DropdownMenuLabel>Act as</DropdownMenuLabel>
-                  <DropdownMenuRadioGroup
-                    value={role}
-                    onValueChange={(value) => {
-                      // Only available in demo mode. With Supabase, a role is
-                      // a row in `profiles` guarded by RLS — a self-service
-                      // switch would let anyone promote themselves.
-                      const next: Role = value;
-                      switchRole(next);
-                      toast.success(`Viewing as ${ROLE_LABEL[next]}`);
-                    }}
-                  >
-                    {DEMO_ACCOUNTS.map((account) => (
-                      <DropdownMenuRadioItem key={account.role} value={account.role}>
-                        <UserRound />
-                        {ROLE_LABEL[account.role]}
-                      </DropdownMenuRadioItem>
-                    ))}
-                  </DropdownMenuRadioGroup>
-                </DropdownMenuGroup>
-
-                <DropdownMenuSeparator />
-
-                <DropdownMenuGroup>
-                  <DropdownMenuItem
-                    variant="destructive"
-                    onClick={() => {
-                      signOut();
-                      void navigate({ to: '/login' });
-                    }}
-                  >
-                    <LogOut />
-                    Sign out
-                  </DropdownMenuItem>
-                </DropdownMenuGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
+                <LogOut className="size-4" />
+              </Button>
+            </div>
           </SidebarMenuItem>
         </SidebarMenu>
 

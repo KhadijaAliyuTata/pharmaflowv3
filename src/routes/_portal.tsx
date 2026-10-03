@@ -1,8 +1,16 @@
-import { Link, Outlet, createFileRoute, useRouterState } from '@tanstack/react-router';
+import {
+  Link,
+  Navigate,
+  Outlet,
+  createFileRoute,
+  redirect,
+  useRouterState,
+} from '@tanstack/react-router';
 import { ArrowLeft, Pill } from 'lucide-react';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
 import { PORTAL_NAV } from '~/lib/portal';
+import { peekSession, useSession } from '~/lib/session';
 import { usePharmacy } from '~/store/pharmacy';
 
 /**
@@ -19,14 +27,31 @@ import { usePharmacy } from '~/store/pharmacy';
  * because they navigate constantly between dense tables. A patient on a phone
  * gets a top bar and a bottom tab bar; on `md` and up the tabs become a plain
  * horizontal nav row.
+ *
+ * Auth: this layout had no guard at all, so `/portal/*` rendered one named
+ * customer's debt, wallet balance and receipt line items to anyone who typed the
+ * URL. It now applies the same two-part session check as `_app`: `peekSession` in
+ * `beforeLoad` for client navigations, and a `Navigate` once `status` resolves
+ * for the server-rendered first paint. See the comment in `_app.tsx` for why the
+ * server is allowed to render and only the client redirects.
  */
 export const Route = createFileRoute('/_portal')({
+  beforeLoad: () => {
+    if (peekSession().status === 'anonymous') {
+      throw redirect({ to: '/login' });
+    }
+  },
   component: PortalShell,
 });
 
 function PortalShell() {
+  const { status } = useSession();
   const branch = usePharmacy((state) => state.branch);
   const pathname = useRouterState({ select: (state) => state.location.pathname });
+
+  // Below the other hooks on purpose: an early return above them would be a
+  // conditional hook, and React tears the route down when the session resolves.
+  if (status === 'anonymous') return <Navigate to="/login" replace />;
 
   return (
     <div className="flex min-h-dvh flex-col bg-background">
