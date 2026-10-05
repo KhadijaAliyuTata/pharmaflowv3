@@ -395,6 +395,38 @@ export function normalisePhone(input: string): string {
 
 /* ----------------------------------------------------------------- sign out */
 
+/**
+ * Re-read the caller's profile from Supabase and update the session in place.
+ *
+ * Needed after a branch switch. `pf_set_active_branch()` writes the role the
+ * session holds at the newly active branch onto `profiles.role`, and `User.role`
+ * is derived from that row — so without this the app keeps showing the previous
+ * branch's permissions. A user who is an owner at head office but only an
+ * assistant at a counter would still see the pricing screen after switching.
+ *
+ * The session identity is untouched: same user, same status, same cache key.
+ * Only the role-bearing fields are replaced.
+ */
+export async function refreshSessionProfile(): Promise<void> {
+  if (DEMO_MODE || !isSupabaseConfigured()) return;
+
+  try {
+    const { data, error } = await getSupabase().auth.getUser();
+    if (error || !data.user) return;
+
+    const profile = await loadProfile(data.user.id, data.user.email ?? '');
+    if (!profile) return;
+
+    writeCache(profile);
+    setPharmacyCurrentUser(profile);
+    emit({ user: profile, status: 'authenticated', offline: false });
+  } catch {
+    // A failed refresh leaves the previous role in place. Safer than clearing the
+    // session: the user is still signed in, and RLS has not relaxed anything on
+    // the server by failing this call.
+  }
+}
+
 export function signOut(): void {
   clearCache();
   if (isSupabaseConfigured()) void getSupabase().auth.signOut();

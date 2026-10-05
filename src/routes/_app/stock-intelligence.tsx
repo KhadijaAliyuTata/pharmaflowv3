@@ -29,8 +29,8 @@ import {
   TableRow,
 } from '~/components/ui/table';
 import { Tabs, TabsList, TabsTrigger } from '~/components/ui/tabs';
-import { Money, PageHeader, SectionTitle, StatTile } from '~/components/app/primitives';
-import { formatCount, sum } from '~/domain/money';
+import { MaybeMoney, Money, PageHeader, SectionTitle, StatTile } from '~/components/app/primitives';
+import { formatCount, sumKnown } from '~/domain/money';
 import { reorderSuggestions, sellableQuantity, stockValue } from '~/domain/selectors';
 import type { ReorderPriority, ReorderSuggestion } from '~/domain/types';
 import { usePharmacy } from '~/store/pharmacy';
@@ -102,13 +102,12 @@ function StockIntelligence() {
     [urgent, soon],
   );
 
-  const orderCost = useMemo(
-    () => sum(toOrder.map((item) => item.estimatedCost)),
-    [toOrder],
-  );
+  // Capital figures, null when any contributing row lacks cost. The reorder
+  // quantities above stay correct either way — only the money is unknown.
+  const orderCost = useMemo(() => sumKnown(toOrder.map((item) => item.estimatedCost)), [toOrder]);
 
   const overstockCapital = useMemo(
-    () => sum((byPriority.get('overstock') ?? []).map((item) => stockValue(item.medicine))),
+    () => sumKnown((byPriority.get('overstock') ?? []).map((item) => stockValue(item.medicine))),
     [byPriority],
   );
 
@@ -143,31 +142,38 @@ function StockIntelligence() {
         </CardContent>
       </Card>
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {/* Tones give the queue a readable order of urgency before a single
+            number is read: red for "order today", amber for "order this week",
+            green for the money, plain for the rest. */}
         <StatTile
           label="Urgent"
           value={urgent.length}
           hint="Out of cover before delivery"
           icon={<TriangleAlert className="size-4" />}
+          tone={urgent.length > 0 ? 'critical' : 'neutral'}
         />
         <StatTile
           label="Soon"
           value={soon.length}
           hint="One lead time of cover left"
           icon={<TrendingDown className="size-4" />}
+          tone={soon.length > 0 ? 'warning' : 'neutral'}
         />
         <StatTile
           label={isOwner ? 'Cost to catch up' : 'Lines to order'}
-          value={isOwner ? <Money value={orderCost} compact className="" /> : toOrder.length}
+          value={isOwner ? <MaybeMoney value={orderCost} compact className="" /> : toOrder.length}
           hint={isOwner ? `${toOrder.length} products` : 'Urgent and soon'}
           icon={<PackageCheck className="size-4" />}
+          tone={isOwner ? 'positive' : 'neutral'}
         />
         {isOwner ? (
           <StatTile
             label="Tied up in overstock"
-            value={<Money value={overstockCapital} compact className="" />}
+            value={<MaybeMoney value={overstockCapital} compact className="" />}
             hint="At cost, 90+ days of cover"
             icon={<Layers className="size-4" />}
+            tone="warning"
           />
         ) : (
           <StatTile
@@ -306,7 +312,11 @@ function ReorderTable({
               </TableCell>
               {isOwner && (
                 <TableCell className="text-right text-muted-foreground">
-                  {item.estimatedCost > 0 ? <Money value={item.estimatedCost} /> : '—'}
+                  {item.estimatedCost && item.estimatedCost > 0 ? (
+                    <Money value={item.estimatedCost} />
+                  ) : (
+                    '—'
+                  )}
                 </TableCell>
               )}
               <TableCell className="max-w-64">

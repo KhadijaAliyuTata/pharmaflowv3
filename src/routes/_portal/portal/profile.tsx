@@ -61,7 +61,7 @@ function PortalProfile() {
         </p>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatTile label="Total spent" value={<Money value={customer.totalSpent} />} />
         <StatTile
           label="Purchases"
@@ -88,7 +88,7 @@ function PortalProfile() {
           </div>
         </CardHeader>
         <CardContent>
-          <dl className="grid gap-4 sm:grid-cols-2">
+          <dl className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Detail icon={<User className="size-3.5" />} label="Name">
               {customer.name}
             </Detail>

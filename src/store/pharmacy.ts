@@ -190,6 +190,19 @@ export function usePharmacyActions() {
     [],
   );
 
+  const updateUnitPrice = useCallback(
+    (medicineId: string, unitKey: string, sellingPrice: number) =>
+      apply(ops.updateUnitPrice(store.getState(), medicineId, unitKey, sellingPrice)),
+    [],
+  );
+
+  /** Owner-only, history-aware. See `ops.updateUnits`. */
+  const updateUnits = useCallback(
+    (medicineId: string, units: AppState['medicines'][number]['units']) =>
+      apply(ops.updateUnits(store.getState(), medicineId, units)),
+    [],
+  );
+
   const setSafetyLock = useCallback(
     (medicineId: string, locked: boolean, reason?: string) =>
       apply(ops.setSafetyLock(store.getState(), medicineId, locked, reason)),
@@ -228,6 +241,8 @@ export function usePharmacyActions() {
     receiveStock,
     approvePricing,
     updatePrice,
+    updateUnitPrice,
+    updateUnits,
     setSafetyLock,
     setBatchRecall,
     adjustStock,

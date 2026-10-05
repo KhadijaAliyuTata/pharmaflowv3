@@ -28,6 +28,31 @@ function TableHeader({ className, ...props }: React.ComponentProps<"thead">) {
   )
 }
 
+/**
+ * Column headers sit on a faint slate fill in navy.
+ *
+ * A data table needs a horizontal anchor or the eye wanders across a dozen
+ * columns looking for the right one. The fill is deliberately near-invisible —
+ * it should register as "this row is a label" and nothing more.
+ *
+ * Deliberately NOT uppercase with wide tracking. It looks good on a three
+ * column table and measurably widens every header, which pushed the widest
+ * table in the app past its container and produced page-level horizontal
+ * scroll on tablets. Navy, semibold and one step smaller does the same job.
+ */
+function TableHead({ className, ...props }: React.ComponentProps<"th">) {
+  return (
+    <th
+      data-slot="table-head"
+      className={cn(
+        "h-10 bg-table-head px-2 text-left align-middle text-xs font-semibold whitespace-nowrap text-table-head-foreground [&:has([role=checkbox])]:pr-0",
+        className
+      )}
+      {...props}
+    />
+  )
+}
+
 function TableBody({ className, ...props }: React.ComponentProps<"tbody">) {
   return (
     <tbody
@@ -56,20 +81,7 @@ function TableRow({ className, ...props }: React.ComponentProps<"tr">) {
     <tr
       data-slot="table-row"
       className={cn(
-        "border-b transition-colors hover:bg-muted/50 has-aria-expanded:bg-muted/50 data-[state=selected]:bg-muted",
-        className
-      )}
-      {...props}
-    />
-  )
-}
-
-function TableHead({ className, ...props }: React.ComponentProps<"th">) {
-  return (
-    <th
-      data-slot="table-head"
-      className={cn(
-        "h-10 px-2 text-left align-middle font-medium whitespace-nowrap text-foreground [&:has([role=checkbox])]:pr-0",
+        "border-b border-border/70 transition-colors hover:bg-primary-soft/60 has-aria-expanded:bg-muted/50 data-[state=selected]:bg-muted",
         className
       )}
       {...props}

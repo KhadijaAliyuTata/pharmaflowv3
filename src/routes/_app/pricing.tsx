@@ -1,6 +1,6 @@
 import { Fragment, useState } from 'react';
 import { createFileRoute } from '@tanstack/react-router';
-import { Lock, Pencil, TrendingUp, TriangleAlert, X } from 'lucide-react';
+import { Layers, Lock, Pencil, TrendingUp, TriangleAlert, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
@@ -16,6 +16,7 @@ import {
   TableRow,
 } from '~/components/ui/table';
 import {
+  MaybeMoney,
   Money,
   PageHeader,
   Percent,
@@ -23,8 +24,10 @@ import {
   StatTile,
   StatusBadge,
 } from '~/components/app/primitives';
+import { UnitEditor } from '~/components/app/unit-editor';
 import { margin, money, multiply, subtract } from '~/domain/money';
 import {
+  hasCost,
   marginPercent,
   portfolioRetail,
   portfolioValue,
@@ -48,14 +51,17 @@ function Pricing() {
   const { approvePricing, updatePrice } = usePharmacyActions();
 
   const retailValue = portfolioRetail(medicines);
-  const costValue = isOwner ? portfolioValue(medicines) : 0;
-  const blendedMargin = subtract(retailValue, costValue);
+  // Cost is owner-only in the database, so for anyone else there is no cost to
+  // subtract and therefore no blended margin. Left null rather than defaulting
+  // cost to 0, which would report the entire retail value as margin.
+  const costValue = isOwner ? portfolioValue(medicines) : null;
+  const blendedMargin = costValue === null ? null : subtract(retailValue, costValue);
 
   return (
     <div className="space-y-6">
       <PageHeader title="Pricing" description="Approve receipts and set prices." />
 
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <StatTile
           label="Awaiting pricing"
           value={pending.length}
@@ -72,7 +78,7 @@ function Pricing() {
           label={isOwner ? 'Blended margin' : 'Margin'}
           value={
             isOwner ? (
-              <Money value={blendedMargin} compact />
+              <MaybeMoney value={blendedMargin} compact />
             ) : (
               <span className="inline-flex items-center gap-1.5 text-base text-muted-foreground">
                 <Lock className="size-4" />
@@ -97,7 +103,7 @@ function Pricing() {
             </CardContent>
           </Card>
         ) : (
-          <div className="grid gap-3 lg:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
             {pending.map((receipt) => (
               <ApprovalCard
                 key={receipt.id}
@@ -201,7 +207,7 @@ function ApprovalCard({
       </CardHeader>
       <CardContent>
         <FieldGroup className="gap-3">
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <Field>
               <FieldLabel htmlFor={`cost-${receipt.id}`}>Cost</FieldLabel>
               <Input
@@ -268,7 +274,16 @@ function PriceRow({
 }) {
   const [editing, setEditing] = useState(false);
   const [priceInput, setPriceInput] = useState(String(medicine.pricePerBaseUnit));
+  const [unitsOpen, setUnitsOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  /**
+   * Cost columns are owner-gated, but being an owner is not on its own enough:
+   * this medicine must actually carry a cost for there to be anything to show.
+   * Without this the table would render `₦0` for a product whose cost simply was
+   * not loaded, which reads as "free to give away".
+   */
+  const canSeeCost = isOwner && hasCost(medicine);
 
   const startEdit = () => {
     setPriceInput(String(medicine.pricePerBaseUnit));
@@ -299,7 +314,7 @@ function PriceRow({
         </TableCell>
 
         <TableCell className="text-right">
-          {isOwner ? (
+          {canSeeCost ? (
             <Money value={medicine.costPerBaseUnit} className="text-muted-foreground" />
           ) : (
             <span
@@ -333,7 +348,7 @@ function PriceRow({
         </TableCell>
 
         <TableCell className="text-right">
-          {isOwner ? (
+          {canSeeCost ? (
             <Money value={unitMargin(medicine)} />
           ) : (
             <span className="inline-flex items-center gap-1 text-muted-foreground">
@@ -343,7 +358,7 @@ function PriceRow({
         </TableCell>
 
         <TableCell className="text-right">
-          {isOwner ? <Percent value={marginPercent(medicine)} /> : '—'}
+          {canSeeCost ? <Percent value={marginPercent(medicine)} /> : '—'}
         </TableCell>
 
         <TableCell>
@@ -367,16 +382,45 @@ function PriceRow({
               </Button>
             </div>
           ) : isOwner ? (
+            <div className="flex items-center justify-end gap-1">
+              {/* Packaging lives next to price because that is where an owner
+                  thinks about it: a box is a price decision as much as a
+                  counting one. Open to everyone, editable only by an owner —
+                  an attendant can see how a product is packed without being
+                  able to repack it. */}
+              <Button
+                size="icon"
+                variant="ghost"
+                className="size-9"
+                onClick={() => setUnitsOpen(true)}
+                aria-label={`Selling units for ${medicine.name}`}
+                title="Selling units"
+              >
+                <Layers />
+              </Button>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="size-9"
+                onClick={startEdit}
+                aria-label={`Change price for ${medicine.name}`}
+                title="Change base price"
+              >
+                <Pencil />
+              </Button>
+            </div>
+          ) : (
             <Button
               size="icon"
               variant="ghost"
               className="size-9"
-              onClick={startEdit}
-              aria-label={`Change price for ${medicine.name}`}
+              onClick={() => setUnitsOpen(true)}
+              aria-label={`Selling units for ${medicine.name}`}
+              title="Selling units"
             >
-              <Pencil />
+              <Layers />
             </Button>
-          ) : null}
+          )}
         </TableCell>
       </TableRow>
 
@@ -389,6 +433,12 @@ function PriceRow({
           </TableCell>
         </TableRow>
       )}
+
+      <UnitEditor
+        medicine={medicine}
+        open={unitsOpen}
+        onOpenChange={setUnitsOpen}
+      />
     </Fragment>
   );
 }

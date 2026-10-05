@@ -54,7 +54,7 @@ function PortalReminders() {
         </Card>
       ) : (
         <>
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <StatTile label="On your list" value={rows.length} hint="Chronic medications" />
             <StatTile label="Available now" value={covered.length} hint="Usable stock" />
             <StatTile label="Not available" value={uncovered.length} hint="Ask at the counter" />

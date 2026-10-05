@@ -37,8 +37,14 @@ import {
 import { formatRelative, formatWhen, sum } from '~/domain/money';
 import type { Customer, Medicine } from '~/domain/types';
 import { useCurrentUser, usePharmacy } from '~/store/pharmacy';
+import { useSeedQuery } from '~/lib/use-seed-query';
 
 export const Route = createFileRoute('/_app/customers')({
+  // Seeded by the header's global search, so a customer result opens the
+  // filtered list.
+  validateSearch: (search: Record<string, unknown>): { q?: string } => ({
+    q: typeof search.q === 'string' ? search.q : undefined,
+  }),
   component: CustomersScreen,
 });
 
@@ -91,7 +97,7 @@ function CustomersScreen() {
   const { role } = useCurrentUser();
   const isOwner = role === 'owner';
 
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useSeedQuery(Route.useSearch().q);
   const [sort, setSort] = useState<SortKey>('name');
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
@@ -133,7 +139,7 @@ function CustomersScreen() {
         }
       />
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {isOwner && (
           <StatTile
             label="Wallet float"

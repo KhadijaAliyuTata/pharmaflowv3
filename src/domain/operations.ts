@@ -14,7 +14,20 @@ import type {
 } from './types';
 import { add, createId, isoTimestamp, money, multiply, subtract, sum } from './money';
 import { canApprovePricing, can } from './state';
-import { liveBatches, saleBlock, stockStatus } from './selectors';
+import {
+  hasCost,
+  liveBatches,
+  saleBlock,
+  stockStatus,
+  unitsUsedInHistory,
+} from './selectors';
+import {
+  calculateUnitCost,
+  convertToBaseUnits,
+  findBaseUnit,
+  findUnit,
+  validateUnitHierarchy,
+} from './units';
 
 /**
  * Every mutation in the app.
@@ -188,9 +201,31 @@ export function checkout(state: AppState, input: CheckoutInput): Result<Checkout
     const block = saleBlock(medicine);
     if (block) return fail<CheckoutResult>(`${medicine.name}: ${block}`);
 
-    if (medicine.totalQuantity < line.baseUnitsTotal) {
+    // The cart's base-unit total is re-derived from the unit hierarchy rather
+    // than trusted. It is the number stock is deducted by, so a tampered or
+    // stale cart must not be able to decide how much leaves the shelf. If the
+    // pharmacy repackaged while the cart was open, the mismatch is caught here
+    // instead of quietly deducting the wrong amount.
+    const hierarchy = validateUnitHierarchy(medicine.units);
+    if (!hierarchy.ok) {
+      const detail = hierarchy.issues.map((issue) => issue.problem).join('; ');
+      return fail<CheckoutResult>(`${medicine.name} has an invalid unit setup: ${detail}`);
+    }
+
+    const conversion = convertToBaseUnits(medicine.units, line.unitKey, line.quantity);
+    if (!conversion.ok) {
+      return fail<CheckoutResult>(`${medicine.name}: ${conversion.error}`);
+    }
+    if (conversion.amount.baseUnits !== line.baseUnitsTotal) {
       return fail<CheckoutResult>(
-        `Only ${medicine.totalQuantity} ${medicine.units[0]?.name ?? 'units'} of ${medicine.name} left`,
+        `${medicine.name}: the cart is out of date — ${line.quantity} × ${conversion.amount.unitName} is now ${conversion.amount.baseUnits} base units, not ${line.baseUnitsTotal}. Re-add the item.`,
+      );
+    }
+
+    if (medicine.totalQuantity < line.baseUnitsTotal) {
+      const baseUnit = findBaseUnit(medicine.units);
+      return fail<CheckoutResult>(
+        `Only ${medicine.totalQuantity} ${baseUnit?.name ?? 'base units'} of ${medicine.name} left`,
       );
     }
   }
@@ -252,6 +287,11 @@ export function checkout(state: AppState, input: CheckoutInput): Result<Checkout
       genericName: medicine.genericName,
       // Snapshot the cost at sale time. Reordering later must not rewrite
       // last month's margin.
+      //
+      // `undefined` when the attendant cannot read cost — the normal case, since
+      // cost is owner-only. Recorded as unknown rather than 0: a zero snapshot
+      // would resurface later as a 100% margin on that line, which is worse than
+      // admitting the cost was never captured.
       costPerBaseUnitSnapshot: medicine.costPerBaseUnit,
     };
   });
@@ -456,9 +496,18 @@ export function voidSale(state: AppState, saleId: string, reason: string): Resul
 export interface ReceiveInput {
   medicineId: string;
   batchNumber: string;
-  baseUnitsReceived: number;
   supplierId: string;
   expiryDate: string;
+  /**
+   * How many were counted, in `unitKey`.
+   *
+   * A delivery note says "5 boxes"; the attendant enters 5 and picks Box. The
+   * canonical quantity is derived here and nowhere else, so an owner
+   * repackaging later cannot change what this receipt means.
+   */
+  quantity: number;
+  /** Key of the unit `quantity` was counted in. Must exist on the medicine. */
+  unitKey: string;
   costPerBaseUnit?: number;
   pricePerBaseUnit?: number;
   notes?: string;
@@ -481,23 +530,39 @@ export function receiveStock(state: AppState, input: ReceiveInput): Result<Stock
   const medicine = state.medicines.find((m) => m.id === input.medicineId);
   if (!medicine) return fail('Product not found');
   if (!input.batchNumber.trim()) return fail('Batch number is required');
-  if (input.baseUnitsReceived <= 0) return fail('Quantity must be greater than zero');
   if (!input.expiryDate) return fail('Expiry date is required');
   if (input.expiryDate <= new Date().toISOString().slice(0, 10)) {
     return fail('Expiry date must be in the future');
   }
 
+  // The entered unit is converted once, here, and the result is what every
+  // downstream calculation uses. The hierarchy is validated first so a broken
+  // packaging definition cannot produce a plausible-looking number.
+  const hierarchy = validateUnitHierarchy(medicine.units);
+  if (!hierarchy.ok) {
+    const detail = hierarchy.issues.map((issue) => issue.problem).join('; ');
+    return fail(`This product's unit setup is invalid: ${detail}`);
+  }
+
+  const conversion = convertToBaseUnits(medicine.units, input.unitKey, input.quantity);
+  if (!conversion.ok) return fail(conversion.error);
+  const baseUnitsReceived = conversion.amount.baseUnits;
+
   const supplier = state.suppliers.find((s) => s.id === input.supplierId);
   if (!supplier) return fail('Supplier not found');
 
-  const priced = canApprovePricing(user.role) && input.costPerBaseUnit !== undefined;
+  // Cost is only taken from the receipt when an owner supplied it. An attendant
+  // can record what arrived but not what it cost, so the receipt goes to the
+  // pricing queue instead of being confirmed.
+  const cost = canApprovePricing(user.role) ? input.costPerBaseUnit : undefined;
+  const priced = cost !== undefined;
 
-  if (priced && input.costPerBaseUnit! <= 0) {
+  if (cost !== undefined && cost <= 0) {
     return fail('Cost must be greater than zero');
   }
   if (priced && input.pricePerBaseUnit !== undefined) {
     if (input.pricePerBaseUnit <= 0) return fail('Selling price must be greater than zero');
-    if (input.pricePerBaseUnit <= input.costPerBaseUnit!) {
+    if (cost !== undefined && input.pricePerBaseUnit <= cost) {
       return fail('Selling price must be above cost');
     }
   }
@@ -512,14 +577,19 @@ export function receiveStock(state: AppState, input: ReceiveInput): Result<Stock
     medicineId: medicine.id,
     medicineName: medicine.name,
     batchNumber: input.batchNumber.trim(),
-    baseUnitsReceived: input.baseUnitsReceived,
+    baseUnitsReceived,
     supplier: supplier.id,
     expiryDate: input.expiryDate,
     dateReceived: now(),
     receivedBy: user.name,
     receivedByRole: user.role,
     status,
-    ...(priced ? { costPerBaseUnit: input.costPerBaseUnit! } : {}),
+    // Snapshot of the delivery note, not a live read of today's packaging.
+    receivedQuantity: conversion.amount.quantity,
+    receivedUnitKey: conversion.amount.unitKey,
+    receivedUnitName: conversion.amount.unitName,
+    receivedUnitMultiplier: conversion.amount.baseUnitsPerUnit,
+    ...(priced ? { costPerBaseUnit: cost } : {}),
     ...(priced && input.pricePerBaseUnit !== undefined
       ? { pricePerBaseUnit: input.pricePerBaseUnit }
       : {}),
@@ -530,7 +600,7 @@ export function receiveStock(state: AppState, input: ReceiveInput): Result<Stock
     id: createId('bat'),
     batchNumber: receipt.batchNumber,
     expiryDate: input.expiryDate,
-    quantity: input.baseUnitsReceived,
+    quantity: baseUnitsReceived,
     costPerBaseUnit: input.costPerBaseUnit ?? medicine.costPerBaseUnit,
     supplier: supplier.id,
     receivedDate: now(),
@@ -547,7 +617,7 @@ export function receiveStock(state: AppState, input: ReceiveInput): Result<Stock
   next = applyStockDelta(
     next,
     medicine.id,
-    input.baseUnitsReceived,
+    baseUnitsReceived,
     'receipt',
     user,
     `Received on ${receipt.receiptNumber}`,
@@ -576,15 +646,24 @@ export function receiveStock(state: AppState, input: ReceiveInput): Result<Stock
     next,
     user,
     'stock_receipt',
-    `Received ${input.baseUnitsReceived} × ${medicine.name} on ${receipt.receiptNumber}`,
-    { receiptId: receipt.id },
+    // In the unit that was actually counted, with the base total alongside.
+    // "Received 5 × Box (100) (500 base units)" is what an auditor needs; a
+    // bare 500 does not say whether the supplier sent five boxes or 500 tablets.
+    `Received ${conversion.amount.quantity} × ${conversion.amount.unitName} of ${medicine.name} on ${receipt.receiptNumber} (${baseUnitsReceived} base units)`,
+    {
+      receiptId: receipt.id,
+      quantity: conversion.amount.quantity,
+      unitKey: conversion.amount.unitKey,
+      unitMultiplier: conversion.amount.baseUnitsPerUnit,
+      baseUnitsReceived,
+    },
   );
 
   if (!priced) {
     next = withNotification(next, {
       type: 'pending_pricing',
       title: 'Receipt awaiting pricing',
-      message: `${receipt.receiptNumber} · ${medicine.name} · ${input.baseUnitsReceived} units`,
+      message: `${receipt.receiptNumber} · ${medicine.name} · ${conversion.amount.quantity} × ${conversion.amount.unitName}`,
       severity: 'warning',
       to: '/pricing',
     });
@@ -682,6 +761,17 @@ export function updatePrice(
   const medicine = state.medicines.find((m) => m.id === medicineId);
   if (!medicine) return fail('Product not found');
   if (pricePerBaseUnit <= 0) return fail('Selling price must be greater than zero');
+
+  // The "price must be above cost" rule needs cost. If this session has none, the
+  // rule cannot be checked — and skipping the check would quietly let an owner
+  // sell below cost with no warning. Fail closed instead: the pricing screen
+  // surfaces this rather than guessing.
+  if (!hasCost(medicine)) {
+    return fail(
+      'Purchase cost is unavailable for this product, so the price cannot be checked against it. Reload with cost access or ask an owner to set cost first.',
+    );
+  }
+
   if (pricePerBaseUnit <= medicine.costPerBaseUnit) {
     return fail(
       `Selling price must be above cost (₦${medicine.costPerBaseUnit.toLocaleString('en-NG')})`,
@@ -705,6 +795,215 @@ export function updatePrice(
       { medicineId, old: medicine.pricePerBaseUnit, next: pricePerBaseUnit },
     ),
     true,
+  );
+}
+
+/**
+ * Sets the selling price of one packaging unit.
+ *
+ * Separate from `updatePrice` because the two are genuinely different decisions.
+ * The base-unit price and a box's price are configured independently: a
+ * pharmacy may sell loose paracetamol at ₦60 and the box at ₦5,000, which is not
+ * 100 × ₦60, and nothing here will "correct" it to be.
+ *
+ * The unit's price is checked against the cost of *that unit*
+ * (`costPerBaseUnit × multiplier`), not the base cost — comparing a box's price
+ * to the price of one tablet would reject every correctly-priced box.
+ *
+ * Owner-only, and it fails closed without cost for the same reason
+ * `updatePrice` does.
+ */
+export function updateUnitPrice(
+  state: AppState,
+  medicineId: string,
+  unitKey: string,
+  sellingPrice: number,
+): Result<boolean> {
+  const user = state.currentUser;
+  if (!canApprovePricing(user.role)) return fail('Only an owner can change prices');
+
+  const medicine = state.medicines.find((m) => m.id === medicineId);
+  if (!medicine) return fail('Product not found');
+
+  const unit = findUnit(medicine.units, unitKey);
+  if (!unit) return fail(`"${unitKey}" is not a unit of this medicine`);
+
+  if (!Number.isFinite(sellingPrice) || sellingPrice < 0) {
+    return fail('Selling price must be zero or more');
+  }
+  if (sellingPrice === 0) return fail('Selling price must be greater than zero');
+  if (sellingPrice === unit.sellingPrice) return fail('Price is unchanged');
+
+  // Cost is owner-only in the database, so without it the "above cost" rule
+  // cannot be checked and must not be silently skipped.
+  const unitCost = calculateUnitCost(medicine, unitKey);
+  if (unitCost === null) {
+    return fail(
+      'Purchase cost is unavailable for this product, so the price cannot be checked against it. Reload with cost access or ask an owner to set cost first.',
+    );
+  }
+  if (sellingPrice <= unitCost) {
+    return fail(
+      `Price must be above the cost of one ${unit.name} (₦${unitCost.toLocaleString('en-NG')})`,
+    );
+  }
+
+  const next: AppState = {
+    ...state,
+    medicines: state.medicines.map((m) =>
+      m.id === medicineId
+        ? {
+            ...m,
+            units: m.units.map((u) =>
+              u.key === unitKey ? { ...u, sellingPrice } : u,
+            ),
+            // The base unit's price and the medicine's base price are the same
+            // number, so they must not be allowed to drift apart.
+            ...(unit.multiplier === 1 ? { pricePerBaseUnit: sellingPrice } : {}),
+          }
+        : m,
+    ),
+  };
+
+  return ok(
+    withAudit(
+      next,
+      user,
+      'price_change',
+      `${medicine.name} · ${unit.name}: ₦${unit.sellingPrice.toLocaleString('en-NG')} → ₦${sellingPrice.toLocaleString('en-NG')}`,
+      { medicineId, unitKey, old: unit.sellingPrice, next: sellingPrice },
+    ),
+    true,
+  );
+}
+
+/* ---------------------------------------------------------- unit hierarchy */
+
+/**
+ * Replaces a medicine's packaging configuration.
+ *
+ * Owner-only, matching `pf_guard_unit_write` on the database. The UI hides the
+ * controls for anyone else, but this is the check that actually matters: the
+ * database is the security boundary and this mirrors it so the local store does
+ * not accept a write the server would refuse.
+ *
+ * Two classes of change are treated very differently:
+ *
+ * **Safe** — adding a unit, renaming one, or repricing one. Sales and receipts
+ * snapshot `unit_key`, `unit_name`, `unit_multiplier` and `base_units_total`, so
+ * the past keeps its own copy of what it meant and is unaffected.
+ *
+ * **Refused** — removing a unit that has been transacted in, or changing the
+ * multiplier of one that has. Both would make an existing document silently
+ * describe something it never was. A box recorded as "5 boxes = 500" must keep
+ * meaning 500 even after the pharmacy starts selling 120-piece boxes.
+ *
+ * Only `units` is touched. Every other field on the medicine is left alone.
+ */
+export function updateUnits(
+  state: AppState,
+  medicineId: string,
+  units: Medicine['units'],
+): Result<Medicine['units']> {
+  const user = state.currentUser;
+  if (!canApprovePricing(user.role)) {
+    return fail('Only an owner can change a product\'s packaging units');
+  }
+
+  const medicine = state.medicines.find((m) => m.id === medicineId);
+  if (!medicine) return fail('Product not found');
+
+  // The one validator. The UI previews with the same function so what the owner
+  // is warned about and what blocks the save can never disagree.
+  const validation = validateUnitHierarchy(units);
+  if (!validation.ok) {
+    return fail(validation.issues.map((issue) => issue.problem).join('; '));
+  }
+
+  const incoming = validation.units;
+  const existingByKey = new Map(medicine.units.map((unit) => [unit.key, unit]));
+  const incomingByKey = new Map(incoming.map((unit) => [unit.key, unit]));
+
+  // --- historical guard -----------------------------------------------------
+  for (const key of unitsUsedInHistory(state, medicineId)) {
+    const before = existingByKey.get(key);
+    if (!before) continue;
+
+    if (!incomingByKey.has(key)) {
+      return fail(
+        `${before.name} has been used in sales or receipts, so it cannot be removed. Its name and price can still be edited.`,
+      );
+    }
+
+    const after = incomingByKey.get(key);
+    if (after && after.multiplier !== before.multiplier) {
+      return fail(
+        `${before.name} has historical transactions, so its conversion cannot change from ${before.multiplier} to ${after.multiplier}. Create a new unit instead.`,
+      );
+    }
+  }
+
+  // The base unit is not removable, and its multiplier is not negotiable. The
+  // validator already requires exactly one multiplier-1 unit; this states the
+  // reason so an owner who hits it learns why rather than guessing.
+  const baseBefore = findBaseUnit(medicine.units);
+  if (baseBefore) {
+    const baseAfter = findBaseUnit(incoming);
+    if (!baseAfter || baseAfter.key !== baseBefore.key) {
+      return fail(
+        `The base unit (${baseBefore.name}) cannot be removed or replaced — it is what all stock is counted in.`,
+      );
+    }
+  }
+
+  // --- price safety ---------------------------------------------------------
+  // Same rule as `updateUnitPrice`: a price is checked against the cost of *that
+  // unit*, and only when it actually changed, so a harmless rename is not blocked
+  // by a cost rule that has nothing to do with it.
+  const costKnown = hasCost(medicine);
+  if (!costKnown) {
+    const priceChanged = incoming.some((unit) => {
+      const before = existingByKey.get(unit.key);
+      return !before || before.sellingPrice !== unit.sellingPrice;
+    });
+    if (priceChanged) {
+      return fail(
+        'Purchase cost is unavailable for this product, so a new or changed selling price cannot be checked against it. Reload with cost access, or ask an owner to set the cost first.',
+      );
+    }
+  } else {
+    for (const unit of incoming) {
+      const unitCost = calculateUnitCost(medicine, unit.key);
+      // `medicine` here is the *current* record; a newly added key has no entry,
+      // so its cost is derived from the base cost directly.
+      const cost = unitCost ?? multiply(medicine.costPerBaseUnit ?? 0, unit.multiplier);
+      if (unit.sellingPrice <= cost) {
+        return fail(
+          `${unit.name} must sell for more than it costs (₦${cost.toLocaleString('en-NG')}).`,
+        );
+      }
+    }
+  }
+
+  // --- persist --------------------------------------------------------------
+  const next: AppState = {
+    ...state,
+    medicines: state.medicines.map((m) => (m.id === medicineId ? { ...m, units: incoming } : m)),
+  };
+
+  const summary = incoming
+    .map((unit) => `${unit.name} ×${unit.multiplier}`)
+    .join(', ');
+
+  return ok(
+    withAudit(
+      next,
+      user,
+      'unit_change',
+      `${medicine.name} packaging: ${summary}`,
+      { medicineId, units: incoming },
+    ),
+    incoming,
   );
 }
 

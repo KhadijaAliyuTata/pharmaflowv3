@@ -1,8 +1,9 @@
 import { useMemo } from 'react';
 import { createFileRoute } from '@tanstack/react-router';
-import { Boxes, Lock, Package, ShieldAlert, Star, Truck } from 'lucide-react';
+import { Boxes, Lock, Package, Search, ShieldAlert, Star, Truck } from 'lucide-react';
 import { Badge } from '~/components/ui/badge';
 import { Card, CardContent, CardHeader } from '~/components/ui/card';
+import { Input } from '~/components/ui/input';
 import {
   Empty,
   EmptyDescription,
@@ -21,18 +22,60 @@ import {
 import { PageHeader, StatTile } from '~/components/app/primitives';
 import { formatDate, money, sum } from '~/domain/money';
 import { stockStatus } from '~/domain/selectors';
+import { useSuppliers } from '~/hooks/use-suppliers';
+import type { Supplier } from '~/domain/types';
 import { useCurrentUser, usePharmacy } from '~/store/pharmacy';
+import { useSeedQuery } from '~/lib/use-seed-query';
 
 export const Route = createFileRoute('/_app/suppliers')({
+  // Seeded by the header's global search so a supplier result opens the
+  // directory filtered to that supplier.
+  validateSearch: (search: Record<string, unknown>): { q?: string } => ({
+    q: typeof search.q === 'string' ? search.q : undefined,
+  }),
   component: SuppliersScreen,
 });
 
 function SuppliersScreen() {
-  const suppliers = usePharmacy((state) => state.suppliers);
+  // Suppliers now come from Supabase, scoped by `suppliers_read`
+  // (`branch_id = pf_current_branch()`), and fall back to the store while the
+  // branch context resolves or when no backend is configured. Medicines are still
+  // localStorage — see docs/PHASE-0-DATA-MIGRATION.md.
+  const { suppliers, loading, error, source } = useSuppliers();
   const medicines = usePharmacy((state) => state.medicines);
   const { role } = useCurrentUser();
+  const [query, setQuery] = useSeedQuery(Route.useSearch().q);
 
-  // medicine.supplier holds the supplier id, so this is a plain join.
+  // Matches on the same fields the global search matches on, so a result that
+  // appeared in the search box is guaranteed to still be visible here.
+  const visible = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return suppliers;
+    return suppliers.filter((supplier) =>
+      [supplier.name, supplier.contactPerson, supplier.phone, supplier.address].some((field) =>
+        field.toLowerCase().includes(needle),
+      ),
+    );
+  }, [suppliers, query]);
+
+  // medicine.supplier holds the supplier id, so this is a plain join. Keyed on id
+  // *and* on name so it survives ids changing from seed strings ('sup-abc') to
+  // database uuids — both sides come from the same source in practice, so this is
+  // belt-and-braces rather than a second lookup path.
+  const supplierByKey = useMemo(() => {
+    const map = new Map<string, Supplier>();
+    for (const supplier of suppliers) {
+      map.set(supplier.id, supplier);
+      map.set(supplier.name.toLowerCase(), supplier);
+    }
+    return map;
+  }, [suppliers]);
+
+  const resolveSupplier = useMemo(
+    () => (key: string) => supplierByKey.get(key) ?? supplierByKey.get(key.toLowerCase()),
+    [supplierByKey],
+  );
+
   const supplierIds = useMemo(() => new Set(suppliers.map((s) => s.id)), [suppliers]);
 
   const suppliedBy = useMemo(() => {
@@ -86,7 +129,7 @@ function SuppliersScreen() {
         }
       />
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatTile
           label="Suppliers"
           value={suppliers.length}
@@ -114,6 +157,16 @@ function SuppliersScreen() {
       <Card>
         <CardHeader className="border-b pb-3">
           <h2 className="text-sm font-semibold tracking-tight">Supplier directory</h2>
+          <div className="relative mt-3">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Name, contact, phone or address"
+              aria-label="Search suppliers"
+              className="pl-8"
+            />
+          </div>
         </CardHeader>
         <CardContent>
           <Table>
@@ -128,7 +181,14 @@ function SuppliersScreen() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {suppliers.map((supplier) => {
+              {visible.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={6} className="py-8 text-center text-sm text-muted-foreground">
+                    No supplier matches “{query.trim()}”.
+                  </TableCell>
+                </TableRow>
+              ) : (
+                visible.map((supplier) => {
                 const supplied = suppliedBy.get(supplier.id) ?? [];
 
                 return (
@@ -166,7 +226,8 @@ function SuppliersScreen() {
                     </TableCell>
                   </TableRow>
                 );
-              })}
+                })
+              )}
             </TableBody>
           </Table>
         </CardContent>
@@ -189,7 +250,7 @@ function SuppliersScreen() {
             </TableHeader>
             <TableBody>
               {medicines.map((medicine) => {
-                const supplier = suppliers.find((s) => s.id === medicine.supplier);
+                const supplier = resolveSupplier(medicine.supplier);
                 const batch = medicine.batches[0];
 
                 return (

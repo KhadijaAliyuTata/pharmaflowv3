@@ -40,6 +40,7 @@ import { Money, PageHeader, StatTile, StatusBadge } from '~/components/app/primi
 import { cn } from '~/lib/cn';
 import { useHotkeys } from '~/lib/use-hotkeys';
 import { add, money, multiply, subtract, sum } from '~/domain/money';
+import { convertToBaseUnits, findUnit } from '~/domain/units';
 import {
   saleBlock,
   salesSince,
@@ -132,8 +133,14 @@ function PointOfSale() {
     () =>
       cart.flatMap((entry) => {
         const medicine = medicines.find((m) => m.id === entry.medicineId);
-        const unit = medicine?.units.find((u) => u.key === entry.unitKey);
+        const unit = medicine ? findUnit(medicine.units, entry.unitKey) : null;
         if (!medicine || !unit) return [];
+
+        // One conversion, one place. `checkout` re-derives this same figure and
+        // refuses the sale if it no longer agrees, so a cart left open across a
+        // repackaging cannot deduct the wrong quantity.
+        const conversion = convertToBaseUnits(medicine.units, unit.key, entry.quantity);
+        if (!conversion.ok) return [];
 
         return [
           {
@@ -143,7 +150,7 @@ function PointOfSale() {
             unitMultiplier: unit.multiplier,
             unitPrice: unit.sellingPrice,
             quantity: entry.quantity,
-            baseUnitsTotal: multiply(unit.multiplier, entry.quantity),
+            baseUnitsTotal: conversion.amount.baseUnits,
             lineTotal: multiply(unit.sellingPrice, entry.quantity),
           },
         ];
@@ -449,7 +456,7 @@ function PointOfSale() {
         }
       />
 
-      <div className="grid gap-4 xl:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         {/* --------------------------------------------------------- search */}
         <div className="space-y-3 xl:col-span-2">
           <Field>
@@ -713,7 +720,7 @@ function PointOfSale() {
                   </Select>
                 </Field>
 
-                <div className="grid gap-3 sm:grid-cols-2">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <Field>
                     <FieldLabel htmlFor="pos-discount">Discount</FieldLabel>
                     <Input
@@ -739,7 +746,7 @@ function PointOfSale() {
                   </Field>
                 </div>
 
-                <div className="grid gap-3 sm:grid-cols-2">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <Field>
                     <FieldLabel htmlFor="pos-tendered">Amount received</FieldLabel>
                     <Input
@@ -775,8 +782,8 @@ function PointOfSale() {
               </FieldGroup>
 
               {controlledLines.length > 0 && (
-                <div className="space-y-2 rounded-lg border border-warning/40 bg-warning/10 p-3">
-                  <p className="flex items-center gap-1.5 text-sm font-medium text-warning-foreground">
+                <div className="space-y-2 rounded-lg border border-warning-border bg-warning-subtle p-3">
+                  <p className="flex items-center gap-1.5 text-sm font-medium text-warning">
                     <TriangleAlert className="size-4" />
                     Prescription items in this sale
                   </p>

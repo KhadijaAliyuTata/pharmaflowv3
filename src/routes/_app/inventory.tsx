@@ -71,18 +71,26 @@ import {
 import { Tabs, TabsList, TabsTrigger } from '~/components/ui/tabs';
 import { Textarea } from '~/components/ui/textarea';
 import {
+  MaybeMoney,
+  MaybePercent,
   Money,
   PageHeader,
-  Percent,
   SectionTitle,
   StatusBadge,
 } from '~/components/app/primitives';
 import { daysUntil, formatCount, formatDate, formatNaira } from '~/domain/money';
+import { formatStockQuantity } from '~/domain/units';
 import { marginPercent, searchMedicines, sellableQuantity, stockStatus } from '~/domain/selectors';
 import type { Medicine, MedicineBatch, StockStatus } from '~/domain/types';
 import { usePharmacy, usePharmacyActions } from '~/store/pharmacy';
+import { useSeedQuery } from '~/lib/use-seed-query';
 
 export const Route = createFileRoute('/_app/inventory')({
+  // Seeds the list's own search box from the header's global search, so a
+  // result for "paracetamol" lands on the filtered list rather than all of it.
+  validateSearch: (search: Record<string, unknown>): { q?: string } => ({
+    q: typeof search.q === 'string' ? search.q : undefined,
+  }),
   component: Inventory,
 });
 
@@ -127,12 +135,13 @@ type Pending =
   | { kind: 'recall'; medicine: Medicine; batch: MedicineBatch; recall: boolean };
 
 function Inventory() {
+  const { q } = Route.useSearch();
   const medicines = usePharmacy((state) => state.medicines);
   const suppliers = usePharmacy((state) => state.suppliers);
   const role = usePharmacy((state) => state.currentUser.role);
   const isOwner = role === 'owner';
 
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useSeedQuery(q);
   const [status, setStatus] = useState<StatusFilter>('all');
   const [category, setCategory] = useState('all');
   const [prescription, setPrescription] = useState<PrescriptionFilter>('all');
@@ -398,6 +407,22 @@ function Inventory() {
                           <p data-numeric className="tabular font-medium">
                             {formatCount(medicine.totalQuantity)}
                           </p>
+                          {/* The same number, said the way a pharmacist would:
+                              498 base units reads as "4 x Box (100) · 9 x
+                              Card (10)". Read-only — the canonical figure above
+                              is what stock, pricing and FEFO all use. */}
+                          {medicine.units.length > 1 && (
+                            <p
+                              data-numeric
+                              className="tabular text-xs text-muted-foreground"
+                              title="Same quantity, expressed in packaging units"
+                            >
+                              {formatStockQuantity(
+                                medicine.units,
+                                medicine.totalQuantity,
+                              )}
+                            </p>
+                          )}
                           {sellable !== medicine.totalQuantity && (
                             <p className="text-xs text-muted-foreground">
                               {formatCount(sellable)} sellable
@@ -413,10 +438,10 @@ function Inventory() {
                         {isOwner && (
                           <>
                             <TableCell className="text-right text-muted-foreground">
-                              <Money value={medicine.costPerBaseUnit} />
+                              <MaybeMoney value={medicine.costPerBaseUnit} />
                             </TableCell>
                             <TableCell className="text-right">
-                              <Percent value={marginPercent(medicine)} />
+                              <MaybePercent value={marginPercent(medicine)} />
                             </TableCell>
                           </>
                         )}
@@ -524,10 +549,23 @@ function compare(
       return a.totalQuantity - b.totalQuantity;
     case 'price':
       return a.pricePerBaseUnit - b.pricePerBaseUnit;
-    case 'cost':
-      return a.costPerBaseUnit - b.costPerBaseUnit;
-    case 'margin':
-      return marginPercent(a) - marginPercent(b);
+    case 'cost': {
+      // Unknown cost sorts last in both directions. Falling back to 0 would
+      // interleave cost-free-looking rows into the middle of a ranked list, and
+      // they are not cost-free — they are unpriced to this session.
+      const left = a.costPerBaseUnit;
+      const right = b.costPerBaseUnit;
+      if (left === undefined) return right === undefined ? 0 : 1;
+      if (right === undefined) return -1;
+      return left - right;
+    }
+    case 'margin': {
+      const left = marginPercent(a);
+      const right = marginPercent(b);
+      if (left === null) return right === null ? 0 : 1;
+      if (right === null) return -1;
+      return left - right;
+    }
     case 'expiry':
       return a.expiryDate.localeCompare(b.expiryDate);
     case 'supplier':
@@ -700,7 +738,14 @@ function ProductSheet({
                 <Fact label="Supplier" value={medicine.supplier} />
                 <Fact label="Price / unit" value={formatNaira(medicine.pricePerBaseUnit)} />
                 {isOwner && (
-                  <Fact label="Cost / unit" value={formatNaira(medicine.costPerBaseUnit)} />
+                  <Fact
+                    label="Cost / unit"
+                    value={
+                      medicine.costPerBaseUnit === undefined
+                        ? 'Not available for your role'
+                        : formatNaira(medicine.costPerBaseUnit)
+                    }
+                  />
                 )}
                 <Fact
                   label="On hand"
@@ -778,7 +823,7 @@ function ProductSheet({
                             </TableCell>
                             {isOwner && (
                               <TableCell className="text-right text-muted-foreground">
-                                <Money value={batch.costPerBaseUnit} />
+                                <MaybeMoney value={batch.costPerBaseUnit} />
                               </TableCell>
                             )}
                             <TableCell className="text-right">
@@ -823,7 +868,7 @@ function ProductSheet({
                 <p className="text-sm">{medicine.commonUse}</p>
                 <p className="text-sm text-muted-foreground">{medicine.storage}</p>
                 {medicine.warnings.length > 0 && (
-                  <ul className="space-y-1 rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm">
+                  <ul className="space-y-1 rounded-lg border border-warning-border bg-warning-subtle p-3 text-sm">
                     {medicine.warnings.map((warning) => (
                       <li key={warning} className="flex gap-2">
                         <span aria-hidden="true" className="text-warning">

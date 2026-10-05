@@ -7,9 +7,12 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground hover:bg-primary/80",
+        // Green surface, white label, and a genuinely darker green on hover
+        // rather than a transparency fade — an opacity fade over a white card
+        // washes the brand colour out instead of deepening it.
+        default: "bg-primary text-primary-foreground hover:bg-primary-hover",
         outline:
-          "border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
+          "border-border bg-card text-navy hover:border-primary/40 hover:bg-primary-soft hover:text-primary-soft-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:text-foreground dark:hover:bg-input/50 dark:aria-expanded:bg-muted dark:aria-expanded:text-foreground",
         secondary:
           "bg-secondary text-secondary-foreground hover:bg-[color-mix(in_oklch,var(--secondary),var(--foreground)_5%)] aria-expanded:bg-secondary aria-expanded:text-secondary-foreground",
         ghost:
@@ -43,12 +46,31 @@ function Button({
   className,
   variant = "default",
   size = "default",
+  render,
+  nativeButton,
   ...props
 }: ButtonPrimitive.Props & VariantProps<typeof buttonVariants>) {
+  // `render` is how this app turns a Button into a router link. When the rendered
+  // element is an anchor rather than a <button>, Base UI's `nativeButton` default
+  // of `true` is wrong — it makes the component claim native button semantics for
+  // an element that has none, and logs a warning on every such instance.
+  //
+  // Inferring it here fixes every call site at once. An explicit `nativeButton`
+  // still wins, so nothing is overridden by surprise.
+  const rendersAnchor =
+    nativeButton === undefined &&
+    render !== undefined &&
+    typeof render === "object" &&
+    render !== null &&
+    "type" in render &&
+    (render as { type?: unknown }).type !== "button";
+
   return (
     <ButtonPrimitive
       data-slot="button"
       className={cn(buttonVariants({ variant, size, className }))}
+      nativeButton={nativeButton ?? (rendersAnchor ? false : true)}
+      render={render}
       {...props}
     />
   )

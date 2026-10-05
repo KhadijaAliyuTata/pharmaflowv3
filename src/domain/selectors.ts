@@ -59,17 +59,89 @@ export function canSell(medicine: Medicine): boolean {
   return saleBlock(medicine) === null;
 }
 
+/* -------------------------------------------------------------- unit history */
+
+/**
+ * Unit keys this medicine has already been transacted in.
+ *
+ * A unit that has appeared on a sale line or a stock receipt is part of the
+ * historical record, and both snapshot `unit_key` and `unit_multiplier` — so the
+ * past does not need the current configuration to stay readable. What it does
+ * need is for the configuration not to *claim* something different: retyping a
+ * box from 100 to 120 pieces would make every old receipt say "5 boxes" and mean
+ * 600. History is never rewritten to accommodate that.
+ *
+ * The UI reads this to explain why a control is locked rather than letting the
+ * owner discover it by being refused on save.
+ *
+ * Takes only the two slices it reads rather than the whole `AppState`, so a
+ * caller holding just those does not have to fabricate a full store.
+ */
+export function unitsUsedInHistory(
+  history: Pick<AppState, 'sales' | 'stockReceipts'>,
+  medicineId: string,
+): Set<string> {
+  const used = new Set<string>();
+
+  for (const sale of history.sales) {
+    for (const item of sale.items) {
+      if (item.medicineId === medicineId) used.add(item.unitKey);
+    }
+  }
+
+  for (const receipt of history.stockReceipts) {
+    if (receipt.medicineId !== medicineId) continue;
+    // Receipts predating the unit-audit columns carry no key. They were counted
+    // in base units, which is the base unit's own key — never removable anyway.
+    if (receipt.receivedUnitKey !== undefined) used.add(receipt.receivedUnitKey);
+  }
+
+  return used;
+}
+
 /* ------------------------------------------------------------------ margins */
 
-export function unitMargin(medicine: Medicine) {
+/**
+ * Whether this medicine's purchase cost is known to this session.
+ *
+ * The single guard every cost calculation must pass first. Cost is owner-only in
+ * the database, so an assistant's `Medicine` has no `costPerBaseUnit` at all.
+ * Everything below returns `null` rather than 0 in that case, because 0 would be
+ * indistinguishable from a genuinely free product and would flow straight into a
+ * margin report as a confident wrong number.
+ */
+export function hasCost(medicine: Medicine): medicine is Medicine & { costPerBaseUnit: number } {
+  return typeof medicine.costPerBaseUnit === 'number';
+}
+
+/**
+ * Margin per base unit, or null when cost is unavailable.
+ *
+ * null, not 0: "we cannot tell you" and "this item has no margin" are different
+ * answers, and an owner needs to be able to tell them apart.
+ */
+export function unitMargin(medicine: Medicine & { costPerBaseUnit: number }): number;
+export function unitMargin(medicine: Medicine): number | null;
+export function unitMargin(medicine: Medicine): number | null {
+  if (!hasCost(medicine)) return null;
   return subtract(medicine.pricePerBaseUnit, medicine.costPerBaseUnit);
 }
 
-export function marginPercent(medicine: Medicine): number {
-  return percentOf(unitMargin(medicine), medicine.pricePerBaseUnit);
+export function marginPercent(medicine: Medicine & { costPerBaseUnit: number }): number;
+export function marginPercent(medicine: Medicine): number | null;
+export function marginPercent(medicine: Medicine): number | null {
+  if (!hasCost(medicine)) return null;
+  return percentOf(
+    subtract(medicine.pricePerBaseUnit, medicine.costPerBaseUnit),
+    medicine.pricePerBaseUnit,
+  );
 }
 
-export function stockValue(medicine: Medicine): number {
+/** Stock value at cost, or null when cost is unavailable. */
+export function stockValue(medicine: Medicine & { costPerBaseUnit: number }): number;
+export function stockValue(medicine: Medicine): number | null;
+export function stockValue(medicine: Medicine): number | null {
+  if (!hasCost(medicine)) return null;
   return multiply(medicine.costPerBaseUnit, medicine.totalQuantity);
 }
 
@@ -77,8 +149,31 @@ export function retailValue(medicine: Medicine): number {
   return multiply(medicine.pricePerBaseUnit, medicine.totalQuantity);
 }
 
-export function portfolioValue(medicines: Medicine[]): number {
-  return sum(medicines.map(stockValue));
+/**
+ * Total stock value at cost across the catalogue, or null if any product's cost is
+ * unknown to this session.
+ *
+ * Null rather than a partial total on purpose. A figure that quietly omitted the
+ * unpriced rows would understate what the pharmacy has tied up in stock, and an
+ * owner acting on it would be wrong by an unknown amount with no way to tell.
+ */
+export function portfolioValue(medicines: Medicine[]): number | null {
+  const values: number[] = [];
+  for (const medicine of medicines) {
+    if (!hasCost(medicine)) return null;
+    values.push(multiply(medicine.costPerBaseUnit, medicine.totalQuantity));
+  }
+  return sum(values);
+}
+
+/**
+ * True when every medicine carries cost, so a portfolio total is trustworthy.
+ *
+ * `every` rather than `some`: a single unpriced product makes the whole total
+ * untrustworthy, so "some are known" is not good enough.
+ */
+export function allCostsKnown(medicines: Medicine[]): boolean {
+  return medicines.every(hasCost);
 }
 
 export function portfolioRetail(medicines: Medicine[]): number {
@@ -100,8 +195,20 @@ export function expiryBuckets(medicines: Medicine[]): ExpiryBucket[] {
     .sort((a, b) => a.daysRemaining - b.daysRemaining);
 }
 
-export function expiringValue(medicines: Medicine[]): number {
-  return sum(expiryBuckets(medicines).map((bucket) => bucket.valueAtCost));
+/**
+ * Value of everything expiring, at cost.
+ *
+ * Null when any bucket lacks cost, rather than summing whatever happens to be
+ * known. A partial total labelled as a total is how an owner understates their
+ * exposure; returning null lets the caller say "cost unavailable" instead.
+ */
+export function expiringValue(medicines: Medicine[]): number | null {
+  const values: number[] = [];
+  for (const bucket of expiryBuckets(medicines)) {
+    if (bucket.valueAtCost === null) return null;
+    values.push(bucket.valueAtCost);
+  }
+  return sum(values);
 }
 
 /* ----------------------------------------------------------------- reorder */
@@ -150,11 +257,16 @@ export function reorderSuggestions(
         priority,
         daysUntilStockout: Math.round(daysUntilStockout),
         recommendedQuantity,
-        estimatedCost: multiply(medicine.costPerBaseUnit, recommendedQuantity),
+        // What restocking costs. Null when this session cannot read cost — the
+        // reorder *quantity* is still correct, only its price is unknown, so the
+        // row is kept rather than dropped.
+        estimatedCost: hasCost(medicine)
+          ? multiply(medicine.costPerBaseUnit, recommendedQuantity)
+          : null,
         reason: buildReason(priority, daysUntilStockout, leadTime, daily),
-      } satisfies ReorderSuggestion & { supplierName?: string } & Record<string, unknown>;
+      } satisfies ReorderSuggestion;
     })
-    .filter((item): item is ReorderSuggestion => item !== null)
+    .filter((item): item is NonNullable<typeof item> => item !== null)
     .sort((a, b) => {
       const rank = { urgent: 0, soon: 1, watch: 2, overstock: 3 } as const;
       return rank[a.priority] - rank[b.priority] || a.daysUntilStockout - b.daysUntilStockout;
@@ -183,25 +295,48 @@ function buildReason(
 
 /* -------------------------------------------------------------------- sales */
 
-export function saleCost(sale: Sale): number {
-  return sum(
-    sale.items.map((item) => multiply(item.costPerBaseUnitSnapshot, item.baseUnitsTotal)),
-  );
+/**
+ * What a sale cost the pharmacy.
+ *
+ * Null when any line has no cost snapshot. A snapshot is missing whenever the
+ * attendant who rang it up could not read cost — which, now that cost is
+ * owner-only in the database, is most sales. Summing the known lines would
+ * report a *lower* cost and therefore a *higher* margin, so the honest answer is
+ * that the cost of this sale is not known from the client.
+ */
+export function saleCost(sale: Sale): number | null {
+  const values: number[] = [];
+  for (const item of sale.items) {
+    if (typeof item.costPerBaseUnitSnapshot !== 'number') return null;
+    values.push(multiply(item.costPerBaseUnitSnapshot, item.baseUnitsTotal));
+  }
+  return sum(values);
 }
 
-/** Summarises sales. v2 recalculated this in four different components. */
+/**
+ * Summarises sales.
+ *
+ * `cost`, `margin` and `marginPercent` are null when the cost of any counted sale
+ * is unknown. `gross`, `discount`, `net` and `outstanding` never depend on cost
+ * and are always real — revenue is not a secret. That distinction is the whole
+ * point of splitting them: an assistant can be shown takings without being shown
+ * what the stock cost.
+ */
 export function summariseSales(sales: Sale[]): SaleSummary {
   const counted = sales.filter((sale) => sale.status !== 'voided');
   const gross = sum(counted.map((sale) => sale.subtotal));
   const discount = sum(counted.map((sale) => sale.discount));
   const net = sum(counted.map((sale) => sale.total));
-  const cost = sum(counted.map(saleCost));
-  const profit = subtract(net, cost);
   const outstanding = sum(
     counted
       .filter((sale) => sale.status === 'credit' || sale.status === 'part_paid')
       .map((sale) => sale.outstandingBalance),
   );
+
+  const costs = counted.map(saleCost);
+  const costKnown = costs.every((value): value is number => value !== null);
+  const cost = costKnown ? sum(costs) : null;
+  const profit = cost === null ? null : subtract(net, cost);
 
   return {
     count: counted.length,
@@ -210,7 +345,7 @@ export function summariseSales(sales: Sale[]): SaleSummary {
     net,
     cost,
     margin: profit,
-    marginPercent: percentOf(profit, net),
+    marginPercent: profit === null ? null : percentOf(profit, net),
     outstanding,
   };
 }
@@ -283,11 +418,16 @@ export function searchMedicines(medicines: Medicine[], query: string): Medicine[
 export interface DashboardSnapshot {
   todayRevenue: number;
   todayTransactions: number;
-  todayMargin: number;
+  /**
+   * Margin on today's takings, or null when the cost of any sale is unknown.
+   * Revenue is always knowable; cost is owner-only, so margin is not.
+   */
+  todayMargin: number | null;
   stockCount: number;
   lowStockCount: number;
   outOfStockCount: number;
-  expiringValueAtCost: number;
+  /** Value at risk from expiring stock, or null when this session cannot read cost. */
+  expiringValueAtCost: number | null;
   expiringCount: number;
   pendingPricing: number;
   outstandingCredit: number;

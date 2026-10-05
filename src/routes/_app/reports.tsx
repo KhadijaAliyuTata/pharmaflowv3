@@ -1,8 +1,9 @@
 import { useMemo } from 'react';
-import { createFileRoute } from '@tanstack/react-router';
-import { Banknote, Lock, Receipt, TrendingDown } from 'lucide-react';
+import { createFileRoute, useNavigate } from '@tanstack/react-router';
+import { Banknote, CalendarRange, Lock, Receipt, TrendingDown } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, XAxis, YAxis } from 'recharts';
 import { Badge } from '~/components/ui/badge';
+import { Button } from '~/components/ui/button';
 import { Card, CardContent, CardHeader } from '~/components/ui/card';
 import {
   ChartContainer,
@@ -18,12 +19,30 @@ import {
   TableHeader,
   TableRow,
 } from '~/components/ui/table';
-import { Money, PageHeader, Percent, SectionTitle, StatTile } from '~/components/app/primitives';
+import { MaybeMoney, Money, PageHeader, Percent, SectionTitle, StatTile } from '~/components/app/primitives';
 import { add, formatDate, formatNaira, formatPercent, percentOf } from '~/domain/money';
 import { dailyRevenue, marginPercent, summariseSales, unitMargin } from '~/domain/selectors';
+import {
+  PERIOD_LABEL,
+  REPORT_PERIODS,
+  salesInPeriod,
+  type ReportPeriod,
+} from '~/domain/dashboard';
+import type { Medicine } from '~/domain/types';
 import { useCurrentUser, usePharmacy } from '~/store/pharmacy';
 
 export const Route = createFileRoute('/_app/reports')({
+  // The owner dashboard's "Gross Profit Today" card deep-links here with
+  // `?period=today`. Validated to the four known periods so a hand-edited URL
+  // cannot put the screen into an undefined state.
+  validateSearch: (search: Record<string, unknown>): { period: ReportPeriod } => {
+    const raw = search.period;
+    return {
+      period: REPORT_PERIODS.includes(raw as ReportPeriod)
+        ? (raw as ReportPeriod)
+        : 'all',
+    };
+  },
   component: ReportsScreen,
 });
 
@@ -52,11 +71,18 @@ function byDescending(bigger: number, smaller: number): number {
 const compact = (value: number) => formatNaira(Number(value), { compact: true });
 
 function ReportsScreen() {
-  const sales = usePharmacy((state) => state.sales);
+  const navigate = useNavigate();
+  // The dashboard's "Gross Profit Today" card links here with `?period=today`.
+  // Default is `all`, which is exactly what this screen showed before the filter
+  // existed, so an owner arriving from the sidebar sees no change.
+  const { period } = Route.useSearch();
+  const allSales = usePharmacy((state) => state.sales);
   const medicines = usePharmacy((state) => state.medicines);
   const suppliers = usePharmacy((state) => state.suppliers);
   const { role } = useCurrentUser();
   const isOwner = role === 'owner';
+
+  const sales = useMemo(() => salesInPeriod(allSales, period), [allSales, period]);
 
   const supplierName = (id: string) =>
     suppliers.find((supplier) => supplier.id === id)?.name ?? 'Unsourced';
@@ -68,13 +94,20 @@ function ReportsScreen() {
     [sales],
   );
 
-  const marginSplit = useMemo(
-    () => [
+  /**
+   * Margin vs cost of goods, or null when cost is unknown.
+   *
+   * A pie chart cannot express "unknown", and zero-filling the unknown slice
+   * would draw a confident-looking chart saying cost of goods is ₦0. So the
+   * split is withheld entirely rather than approximated.
+   */
+  const marginSplit = useMemo(() => {
+    if (summary.margin === null || summary.cost === null) return null;
+    return [
       { label: 'Margin', value: summary.margin, fill: 'var(--chart-1)' },
       { label: 'Cost of goods', value: summary.cost, fill: 'var(--chart-3)' },
-    ],
-    [summary],
-  );
+    ];
+  }, [summary]);
 
   const topProducts = useMemo(() => {
     const totals = new Map<string, { name: string; revenue: number; units: number }>();
@@ -105,11 +138,16 @@ function ReportsScreen() {
       .slice(0, 6);
   }, [sales]);
 
+  // Products whose margin is thin enough to act on. Products with no known cost
+  // are excluded rather than treated as 0% — "we don't know its margin" is not
+  // the same as "it has no margin", and listing it here would be a false alarm.
   const thinMargins = useMemo(
     () =>
       medicines
         .map((medicine) => ({ medicine, percent: marginPercent(medicine) }))
-        .filter((entry) => entry.percent < THIN_MARGIN)
+        .filter((entry): entry is { medicine: Medicine; percent: number } => {
+          return entry.percent !== null && entry.percent < THIN_MARGIN;
+        })
         .sort((a, b) => byDescending(a.percent, b.percent)),
     [medicines],
   );
@@ -125,12 +163,45 @@ function ReportsScreen() {
         }
         meta={
           <p className="text-xs text-muted-foreground">
-            Derived from recorded sales. Export and date-range filters are not wired up.
+            Derived from recorded sales. Export is not wired up.
           </p>
         }
       />
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+      {/* Period filter. Writes to the URL rather than local state, so the
+          dashboard's deep link and a period chosen here are the same thing —
+          there is no way to be looking at "today" without the URL saying so. */}
+      <div
+        role="group"
+        aria-label="Reporting period"
+        className="flex flex-wrap items-center gap-1.5"
+      >
+        <CalendarRange className="size-4 shrink-0 text-muted-foreground" />
+        <span className="mr-1 text-sm font-medium">Period</span>
+        {REPORT_PERIODS.map((option) => {
+          const selected = option === period;
+          return (
+            <Button
+              key={option}
+              size="sm"
+              variant={selected ? 'default' : 'outline'}
+              aria-pressed={selected}
+              onClick={() => {
+                void navigate({ to: '/reports', search: { period: option } });
+              }}
+            >
+              {PERIOD_LABEL[option]}
+            </Button>
+          );
+        })}
+        {period !== 'all' && (
+          <p className="text-xs text-muted-foreground">
+            Showing {PERIOD_LABEL[period].toLowerCase()} · voids excluded
+          </p>
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <StatTile
           label="Transactions"
           value={summary.count}
@@ -147,8 +218,12 @@ function ReportsScreen() {
             />
             <StatTile
               label="Gross margin"
-              value={<Money value={summary.margin} compact />}
-              hint={`${formatPercent(summary.marginPercent)} of net revenue`}
+              value={<MaybeMoney value={summary.margin} compact />}
+              hint={
+                summary.marginPercent === null
+                  ? 'Cost of goods not captured for some sales'
+                  : `${formatPercent(summary.marginPercent)} of net revenue`
+              }
             />
             <StatTile
               label="Discounts given"
@@ -173,7 +248,7 @@ function ReportsScreen() {
 
       {isOwner ? (
         <>
-          <div className="grid gap-4 lg:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
             <Card className="lg:col-span-2">
               <CardHeader className="pb-2">
                 <SectionTitle>Daily revenue, last 7 days</SectionTitle>
@@ -216,48 +291,60 @@ function ReportsScreen() {
                 <SectionTitle>Where each naira goes</SectionTitle>
               </CardHeader>
               <CardContent className="space-y-3">
-                <ChartContainer config={MARGIN_CONFIG} className="aspect-square w-full max-h-56">
-                  <PieChart>
-                    <ChartTooltip
-                      content={
-                        <ChartTooltipContent
-                          hideLabel
-                          formatter={(value) => formatNaira(Number(value))}
+                {marginSplit ? (
+                  <>
+                    <ChartContainer
+                      config={MARGIN_CONFIG}
+                      className="aspect-square w-full max-h-56"
+                    >
+                      <PieChart>
+                        <ChartTooltip
+                          content={
+                            <ChartTooltipContent
+                              hideLabel
+                              formatter={(value) => formatNaira(Number(value))}
+                            />
+                          }
                         />
-                      }
-                    />
-                    <Pie
-                      data={marginSplit}
-                      dataKey="value"
-                      nameKey="label"
-                      innerRadius={52}
-                      outerRadius={80}
-                      strokeWidth={2}
-                    >
-                      {marginSplit.map((slice) => (
-                        <Cell key={slice.label} fill={slice.fill} />
-                      ))}
-                    </Pie>
-                  </PieChart>
-                </ChartContainer>
+                        <Pie
+                          data={marginSplit}
+                          dataKey="value"
+                          nameKey="label"
+                          innerRadius={52}
+                          outerRadius={80}
+                          strokeWidth={2}
+                        >
+                          {marginSplit.map((slice) => (
+                            <Cell key={slice.label} fill={slice.fill} />
+                          ))}
+                        </Pie>
+                      </PieChart>
+                    </ChartContainer>
 
-                <ul className="space-y-1.5">
-                  {marginSplit.map((slice) => (
-                    <li
-                      key={slice.label}
-                      className="flex items-center justify-between gap-2 text-xs"
-                    >
-                      <span className="flex items-center gap-1.5 text-muted-foreground">
-                        <span className="bg-muted-foreground/40 size-2 rounded-xs" />
-                        {slice.label}
-                      </span>
-                      <span className="flex items-center gap-2">
-                        <Money value={slice.value} compact />
-                        <Percent value={percentOf(slice.value, summary.net)} />
-                      </span>
-                    </li>
-                  ))}
-                </ul>
+                    <ul className="space-y-1.5">
+                      {marginSplit.map((slice) => (
+                        <li
+                          key={slice.label}
+                          className="flex items-center justify-between gap-2 text-xs"
+                        >
+                          <span className="flex items-center gap-1.5 text-muted-foreground">
+                            <span className="bg-muted-foreground/40 size-2 rounded-xs" />
+                            {slice.label}
+                          </span>
+                          <span className="flex items-center gap-2">
+                            <Money value={slice.value} compact />
+                            <Percent value={percentOf(slice.value, summary.net)} />
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    Cost of goods is not recorded for every sale in this period, so the split
+                    between margin and cost cannot be shown. Net revenue above is unaffected.
+                  </p>
+                )}
               </CardContent>
             </Card>
           </div>
@@ -384,13 +471,13 @@ function ReportsScreen() {
                         {supplierName(medicine.supplier)}
                       </TableCell>
                       <TableCell className="text-right">
-                        <Money value={medicine.costPerBaseUnit} />
+                        <MaybeMoney value={medicine.costPerBaseUnit} />
                       </TableCell>
                       <TableCell className="text-right">
                         <Money value={medicine.pricePerBaseUnit} />
                       </TableCell>
                       <TableCell className="text-right">
-                        <Money value={unitMargin(medicine)} />
+                        <MaybeMoney value={unitMargin(medicine)} />
                       </TableCell>
                       <TableCell className="text-right">
                         <span className="inline-flex items-center gap-1 text-destructive">

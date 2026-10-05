@@ -62,7 +62,7 @@ function PortalOrders() {
         </p>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <StatTile label="Open" value={open.length} hint="Awaiting pickup or delivery" />
         <StatTile label="Unpaid" value={unpaid.length} hint="Settle at the counter" />
         <StatTile label="All orders" value={mine.length} />

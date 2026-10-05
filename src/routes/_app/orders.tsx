@@ -97,7 +97,7 @@ function OrdersScreen() {
         description="Customer orders and the requests they leave when the shelf is empty."
       />
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatTile
           label="Open orders"
           value={openOrders.length}

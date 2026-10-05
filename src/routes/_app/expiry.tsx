@@ -30,7 +30,7 @@ import {
   TableRow,
 } from '~/components/ui/table';
 import { Textarea } from '~/components/ui/textarea';
-import { Money, PageHeader, SectionTitle, StatTile } from '~/components/app/primitives';
+import { MaybeMoney, Money, PageHeader, SectionTitle, StatTile } from '~/components/app/primitives';
 import { daysUntil, formatCount, formatDate, multiply, sum } from '~/domain/money';
 import { expiryBuckets } from '~/domain/selectors';
 import type { Medicine, MedicineBatch } from '~/domain/types';
@@ -47,7 +47,8 @@ interface ExpiryRow {
   expiryDate: string;
   daysRemaining: number;
   quantity: number;
-  valueAtCost: number;
+  /** Value at risk at cost, or null when this session cannot read cost. */
+  valueAtCost: number | null;
 }
 
 type Group = 'expired' | 'under_30' | 'days_30_90';
@@ -115,7 +116,9 @@ function Expiry() {
           expiryDate: batch.expiryDate,
           daysRemaining: daysUntil(batch.expiryDate),
           quantity: batch.quantity,
-          valueAtCost: multiply(batch.costPerBaseUnit, batch.quantity),
+          valueAtCost: typeof batch.costPerBaseUnit === 'number'
+            ? multiply(batch.costPerBaseUnit, batch.quantity)
+            : null,
         });
       }
     }
@@ -132,7 +135,16 @@ function Expiry() {
     [rows],
   );
 
-  const valueAtRisk = useMemo(() => sum(rows.map((row) => row.valueAtCost)), [rows]);
+  // Total value at risk, or null if any row's cost is unknown. Summing only the
+  // known rows would understate the exposure while still looking like a total.
+  const valueAtRisk = useMemo(() => {
+    const values: number[] = [];
+    for (const row of rows) {
+      if (row.valueAtCost === null) return null;
+      values.push(row.valueAtCost);
+    }
+    return sum(values);
+  }, [rows]);
   const unitsAffected = useMemo(() => sum(rows.map((row) => row.quantity)), [rows]);
 
   const expiringCount = grouped.under_30.length + grouped.days_30_90.length;
@@ -149,11 +161,11 @@ function Expiry() {
         }
       />
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {isOwner ? (
           <StatTile
             label="Value at risk"
-            value={<Money value={valueAtRisk} compact className="" />}
+            value={<MaybeMoney value={valueAtRisk} compact className="" />}
             hint="Expired and expiring, at cost"
             icon={<ShieldAlert className="size-4" />}
           />
@@ -337,7 +349,7 @@ function ExpiryTable({
               </TableCell>
               {isOwner && (
                 <TableCell className="text-right text-muted-foreground">
-                  <Money value={row.valueAtCost} />
+                  <MaybeMoney value={row.valueAtCost} />
                 </TableCell>
               )}
               <TableCell className="text-right">

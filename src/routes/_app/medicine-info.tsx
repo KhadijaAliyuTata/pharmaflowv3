@@ -41,7 +41,7 @@ import {
   TableHeader,
   TableRow,
 } from '~/components/ui/table';
-import { Money, PageHeader, SectionTitle, StatusBadge } from '~/components/app/primitives';
+import { MaybeMoney, Money, PageHeader, SectionTitle, StatusBadge } from '~/components/app/primitives';
 import { daysUntil, formatCount, formatDate } from '~/domain/money';
 import { searchMedicines, sellableQuantity, stockStatus } from '~/domain/selectors';
 import { usePharmacy } from '~/store/pharmacy';
@@ -77,7 +77,7 @@ function MedicineInfo() {
         description="Clinical dossier and registration record. Check warnings before dispensing."
       />
 
-      <div className="grid gap-4 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-4">
         <div className="space-y-3 lg:col-span-1">
           <InputGroup>
             <InputGroupAddon>
@@ -233,7 +233,7 @@ function MedicineInfo() {
                 </CardContent>
               </Card>
 
-              <div className="grid gap-4 md:grid-cols-2">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <Card>
                   <CardHeader className="pb-2">
                     <SectionTitle>Clinical</SectionTitle>
@@ -293,7 +293,7 @@ function MedicineInfo() {
                     {isOwner && (
                       <div className="flex items-baseline justify-between gap-2">
                         <span className="text-muted-foreground">Cost / unit</span>
-                        <Money value={selected.costPerBaseUnit} />
+                        <MaybeMoney value={selected.costPerBaseUnit} />
                       </div>
                     )}
                     <Separator />
@@ -363,7 +363,7 @@ function MedicineInfo() {
                               </TableCell>
                               {isOwner && (
                                 <TableCell className="text-right text-muted-foreground">
-                                  <Money value={batch.costPerBaseUnit} />
+                                  <MaybeMoney value={batch.costPerBaseUnit} />
                                 </TableCell>
                               )}
                               <TableCell className="text-right">
@@ -438,7 +438,7 @@ function NafdacDialog({
         </DialogHeader>
 
         <div className="space-y-3 text-sm">
-          <div className="rounded-lg border border-warning/40 bg-warning/10 p-3">
+          <div className="rounded-lg border border-warning-border bg-warning-subtle p-3">
             <p className="flex items-start gap-2">
               <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warning" />
               <span>

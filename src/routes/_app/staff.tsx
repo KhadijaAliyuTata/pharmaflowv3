@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { createFileRoute } from '@tanstack/react-router';
 import { BadgeCheck, Filter, ShieldAlert, Stethoscope, Users } from 'lucide-react';
 import { Avatar, AvatarFallback } from '~/components/ui/avatar';
@@ -28,43 +28,23 @@ import {
 } from '~/components/ui/table';
 import { PageHeader, SectionTitle, StatTile } from '~/components/app/primitives';
 import { formatRelative } from '~/domain/money';
-import type { AuditAction } from '~/domain/types';
+import { ACTION_LABEL, ACTION_TONE } from '~/domain/audit-labels';
 import { useCurrentUser, usePharmacy } from '~/store/pharmacy';
 
 export const Route = createFileRoute('/_app/staff')({
+  // A staff search result lands here focused on that person: `?q=` is matched
+  // against the team, and an exact name match seeds the audit log's actor
+  // filter — which is the "what did they do" view of the same person.
+  validateSearch: (search: Record<string, unknown>): { q?: string } => ({
+    q: typeof search.q === 'string' ? search.q : undefined,
+  }),
   component: StaffScreen,
 });
 
 const ALL = 'all';
 
-/** v2 had no labels for these, so every screen invented its own. */
-const ACTION_LABEL: Record<AuditAction, string> = {
-  sale: 'Sale',
-  refund: 'Refund',
-  void: 'Void',
-  discount: 'Discount',
-  stock_receipt: 'Stock receipt',
-  pricing_approval: 'Pricing approval',
-  price_change: 'Price change',
-  recall_lock: 'Recall / lock',
-  stock_adjustment: 'Stock adjustment',
-  login: 'Sign in',
-  logout: 'Sign out',
-};
-
-const ACTION_TONE: Record<AuditAction, 'success' | 'warning' | 'destructive' | 'secondary'> = {
-  sale: 'success',
-  refund: 'warning',
-  void: 'destructive',
-  discount: 'warning',
-  stock_receipt: 'secondary',
-  pricing_approval: 'secondary',
-  price_change: 'secondary',
-  recall_lock: 'destructive',
-  stock_adjustment: 'secondary',
-  login: 'secondary',
-  logout: 'secondary',
-};
+// ACTION_LABEL and ACTION_TONE moved to `~/domain/audit-labels` so this screen
+// and the owner dashboard's activity ledger cannot drift apart.
 
 function initials(name: string): string {
   return name
@@ -81,8 +61,28 @@ function StaffScreen() {
   const currentUser = usePharmacy((state) => state.currentUser);
   const { role } = useCurrentUser();
 
-  const [actor, setActor] = useState(ALL);
+  const { q } = Route.useSearch();
+
+  // `?q=` only pre-selects an actor when it names someone on the team exactly.
+  // A partial term must not silently narrow the audit log to nothing, so
+  // anything that is not a known name leaves the filter on "All Staff".
+  const [actor, setActor] = useState(() => {
+    if (!q) return ALL;
+    const match = users.find((user) => user.name.toLowerCase() === q.trim().toLowerCase());
+    return match ? match.name : ALL;
+  });
   const [action, setAction] = useState(ALL);
+
+  // Re-focus when a second search arrives from the header while this screen is
+  // already open, otherwise the new `?q=` would look like it did nothing.
+  useEffect(() => {
+    if (!q) {
+      setActor(ALL);
+      return;
+    }
+    const match = users.find((user) => user.name.toLowerCase() === q.trim().toLowerCase());
+    setActor(match ? match.name : ALL);
+  }, [q, users]);
 
   // v2 stored the audit array twice, under auditLogs and auditEvents. One source.
   const filtered = useMemo(
@@ -129,7 +129,7 @@ function StaffScreen() {
         }
       />
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
         <StatTile
           label="Team"
           value={users.length}

@@ -7,130 +7,201 @@
 @custom-variant dark (&:is(.dark *));
 
 /* ---------------------------------------------------------------- palette
-   Deliberately neutral: pure greyscale, no hue. Every colour in the app is
-   achromatic except the four status hues. Retheming later means replacing
-   these three blocks — no component changes. */
+   PharmaFlow brand tokens. Every colour below was derived from the four brand
+   values and checked for WCAG AA contrast before being written here — see the
+   note under `--primary` for the one place the brand value was darkened.
+
+   Brand reference:
+     navy    #043263      green  #2A932C
+     navy-2  #064276      green-2 #4FAE2A
+
+   Structure: navy carries headings, navigation and the sidebar. Green is
+   reserved for the primary action and for "this is fine" — never decoration.
+   Red stays reserved for genuine loss. Retheming means editing these blocks
+   only; no component should hard-code a hex. */
 
 :root {
   --radius: 0.625rem;
 
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
+  /* Surfaces. The app sits on a very light slate so white cards read as
+     objects on a desk, rather than the page being one white sheet. */
+  --background: oklch(0.9782 0.0034 247.86); /* #F6F8FA */
+  --foreground: oklch(0.2795 0.0368 260.03); /* #1E293B slate-800, not black */
 
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
+  --card-foreground: oklch(0.2795 0.0368 260.03);
 
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
+  --popover-foreground: oklch(0.2795 0.0368 260.03);
 
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
+  /* `--primary` is the brand green darkened 16% (#268828) rather than the
+     literal #2A932C. White on #2A932C measures 3.96:1, which fails WCAG AA for
+     the 14px medium-weight text these buttons carry; #268828 measures 4.53:1.
+     The hue and chroma are untouched, so it still reads as PharmaFlow green.
+     The literal brand value is kept below as `--brand-green` for accents and
+     chart fills, where no white text sits on top. */
+  --primary: oklch(0.5508 0.16 143.27);
+  --primary-foreground: oklch(1 0 0);
 
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.9632 0.0034 247.86);
+  --secondary-foreground: oklch(0.3069 0.0935 254.4); /* navy */
 
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
+  --muted: oklch(0.966 0.0062 255.48); /* #F1F4F8 */
+  --muted-foreground: oklch(0.5217 0.0391 253.89); /* #5A6B80, 5.12:1 on bg */
 
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
+  --accent: oklch(0.9652 0.0035 219.53);
+  --accent-foreground: oklch(0.3069 0.0935 254.4);
 
-  --destructive: oklch(0.577 0.245 27.325);
-  --destructive-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.5771 0.2152 27.33); /* #DC2626 */
+  --destructive-foreground: oklch(1 0 0);
 
-  --success: oklch(0.596 0.145 163.225);
-  --success-foreground: oklch(0.985 0 0);
-  --warning: oklch(0.769 0.188 70.08);
-  --warning-foreground: oklch(0.216 0.006 56.043);
-  --info: oklch(0.623 0.214 259.815);
-  --info-foreground: oklch(0.985 0 0);
+  --success: oklch(0.5182 0.1507 143.29); /* #227D24 — readable as text */
+  --success-foreground: oklch(1 0 0);
+  --warning: oklch(0.5553 0.1455 49); /* #B45309 amber */
+  --warning-foreground: oklch(1 0 0);
+  --info: oklch(0.4888 0.1439 255.33); /* #1A5FAF */
+  --info-foreground: oklch(1 0 0);
 
-  --warning-subtle: oklch(0.973 0.038 79);
-  --warning-border: oklch(0.882 0.1 79);
-  --success-subtle: oklch(0.968 0.021 152);
-  --success-border: oklch(0.869 0.075 152);
-  --danger-subtle: oklch(0.964 0.018 18);
-  --danger-border: oklch(0.871 0.077 18);
-  --info-subtle: oklch(0.962 0.019 250);
-  --info-border: oklch(0.855 0.062 250);
-  --warning-subtle: oklch(0.29 0.05 75);
-  --warning-border: oklch(0.38 0.075 72);
-  --success-subtle: oklch(0.27 0.045 152);
-  --success-border: oklch(0.36 0.07 152);
-  --danger-subtle: oklch(0.28 0.06 20);
-  --danger-border: oklch(0.37 0.09 20);
-  --info-subtle: oklch(0.28 0.055 255);
-  --info-border: oklch(0.36 0.09 255);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+  /* Tinted status backgrounds. These were previously declared twice in this
+     block — once light, once dark — so the dark values silently won and every
+     "subtle" tint rendered as a dark fill in light mode. Declared once now. */
+  --success-subtle: oklch(0.973 0.0051 145.54);
+  --success-border: oklch(0.9247 0.0154 145.45);
+  --warning-subtle: oklch(0.9707 0.0055 31.05);
+  --warning-border: oklch(0.9162 0.0149 33.07);
+  --danger-subtle: oklch(0.9778 0.0064 17.27);
+  --danger-border: oklch(0.9319 0.022 17.55);
+  --info-subtle: oklch(0.9768 0.0067 277.16);
+  --info-border: oklch(0.9283 0.0197 270.21);
 
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
+  --border: oklch(0.9288 0.0126 255.51); /* #E2E8F0 */
+  --input: oklch(0.8925 0.0139 258.35); /* #D6DCE5 — visible but soft */
+  --ring: oklch(0.5508 0.16 143.27); /* green focus ring, 4.26:1 on bg */
 
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  /* Brand accents, exposed so components can reach for brand colour without
+     inventing a hex. */
+  --brand-navy: oklch(0.3194 0.0984 254.54); /* #043263 */
+  --brand-blue: oklch(0.3748 0.1049 251.24); /* #064276 */
+  --brand-green: oklch(0.583 0.1693 143.26); /* #2A932C, literal brand */
+  --brand-green-2: oklch(0.6678 0.1879 138.68); /* #4FAE2A */
+
+  --navy: oklch(0.3069 0.0935 254.4); /* headings, slightly deepened for text */
+  --navy-soft: oklch(0.9824 0.0013 286.38);
+  --navy-border: oklch(0.9459 0.0029 264.54);
+  --navy-foreground: oklch(0.3194 0.0984 254.54); /* body text on navy surfaces */
+
+  --primary-hover: oklch(0.5214 0.1508 143.31); /* #237E25 */
+  --primary-soft: oklch(0.973 0.0051 145.54);
+  --primary-soft-foreground: oklch(0.5182 0.1507 143.29);
+
+  --table-head: oklch(0.9635 0.0045 258.32);
+  --table-head-foreground: oklch(0.3069 0.0935 254.4);
+
+  /* Charts. Brand-derived and ordered so adjacent series stay distinguishable:
+     green, navy, light green, amber, slate. */
+  --chart-1: oklch(0.583 0.1693 143.26);
+  --chart-2: oklch(0.3748 0.1049 251.24);
+  --chart-3: oklch(0.6678 0.1879 138.68);
+  --chart-4: oklch(0.5553 0.1455 49);
+  --chart-5: oklch(0.8268 0.0086 271.31);
+
+  --sidebar: oklch(0.9884 0.0013 286.38); /* white with a whisper of navy */
+  --sidebar-foreground: oklch(0.3194 0.0984 254.54);
+  --sidebar-primary: oklch(0.5508 0.16 143.27);
+  --sidebar-primary-foreground: oklch(1 0 0);
+  --sidebar-accent: oklch(0.97 0.0051 145.54); /* green tint: hover + active row */
+  --sidebar-accent-foreground: oklch(0.3069 0.0935 254.4);
+  /* Separate from `--sidebar-accent-foreground` on purpose: that token also
+     tints every sub-item icon, and greening all of them would make the nav
+     look decorated rather than directed. Only the row you are actually on
+     turns green. */
+  --sidebar-active-foreground: oklch(0.5182 0.1507 143.29); /* 4.83:1 on the tint */
+  --sidebar-border: oklch(0.9288 0.0126 255.51);
+  --sidebar-ring: oklch(0.5508 0.16 143.27);
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
+  --background: oklch(0.1831 0.0309 263.38); /* #0B1220 navy-black */
+  --foreground: oklch(0.9288 0.0126 255.51);
 
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
+  --card: oklch(0.2275 0.0376 263.41); /* #131C2E */
+  --card-foreground: oklch(0.9288 0.0126 255.51);
 
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.2275 0.0376 263.41);
+  --popover-foreground: oklch(0.9288 0.0126 255.51);
 
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
+  /* Green lightens in dark mode and the label goes dark, so the button still
+     reads as green rather than glowing. */
+  --primary: oklch(0.699 0.0884 145.03); /* #7BAD7C */
+  --primary-foreground: oklch(0.1726 0.0247 149.33);
 
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.2608 0.0364 263.63);
+  --secondary-foreground: oklch(0.9288 0.0126 255.51);
 
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
+  --muted: oklch(0.2608 0.0364 263.63);
+  --muted-foreground: oklch(0.7328 0.0367 256.37);
 
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
+  --accent: oklch(0.2608 0.0364 263.63);
+  --accent-foreground: oklch(0.9288 0.0126 255.51);
 
-  --destructive: oklch(0.704 0.191 22.216);
-  --destructive-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.729 0.1115 20.13);
+  --destructive-foreground: oklch(0.1726 0.0247 149.33);
 
-  --success: oklch(0.696 0.17 162.48);
-  --success-foreground: oklch(0.145 0 0);
-  --warning: oklch(0.828 0.189 84.429);
-  --warning-foreground: oklch(0.216 0.006 56.043);
-  --info: oklch(0.685 0.169 237.323);
-  --info-foreground: oklch(0.145 0 0);
+  --success: oklch(0.8124 0.0457 145.14);
+  --success-foreground: oklch(0.1726 0.0247 149.33);
+  /* Hue held at amber (~70) rather than mixed from the light-mode hex. Mixing
+     #B45309 into navy drags the hue to ~31, which reads as "error", not
+     "warning" — the one thing a warning tint must never do. */
+  --warning: oklch(0.82 0.09 75);
+  --warning-foreground: oklch(0.1726 0.0247 149.33);
+  --info: oklch(0.7656 0.0709 267.56);
+  --info-foreground: oklch(0.1726 0.0247 149.33);
 
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
+  --success-subtle: oklch(0.3 0.055 152);
+  --success-border: oklch(0.42 0.075 150);
+  --warning-subtle: oklch(0.31 0.055 70);
+  --warning-border: oklch(0.43 0.075 68);
+  --danger-subtle: oklch(0.29 0.085 22);
+  --danger-border: oklch(0.42 0.1 20);
+  --info-subtle: oklch(0.3 0.085 255);
+  --info-border: oklch(0.42 0.1 253);
 
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
+  --border: oklch(0.3178 0.0462 263.59);
+  --input: oklch(0.3714 0.0523 262.43);
+  --ring: oklch(0.7591 0.0629 145.64);
 
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --brand-navy: oklch(0.8625 0.0427 253.83);
+  --brand-blue: oklch(0.72 0.0866 251.24);
+  --brand-green: oklch(0.8124 0.0457 145.14);
+  --brand-green-2: oklch(0.8124 0.0457 145.14);
+
+  --navy: oklch(0.8625 0.0427 253.83);
+  --navy-soft: oklch(0.2608 0.0364 263.63);
+  --navy-border: oklch(0.3178 0.0462 263.59);
+  --navy-foreground: oklch(0.1831 0.0309 263.38);
+
+  --primary-hover: oklch(0.8124 0.0457 145.14);
+  --primary-soft: oklch(0.3 0.055 152);
+  --primary-soft-foreground: oklch(0.8124 0.0457 145.14);
+
+  --table-head: oklch(0.2608 0.0364 263.63);
+  --table-head-foreground: oklch(0.9288 0.0126 255.51);
+
+  --chart-1: oklch(0.699 0.0884 145.03);
+  --chart-2: oklch(0.72 0.0866 251.24);
+  --chart-3: oklch(0.8124 0.0457 145.14);
+  --chart-4: oklch(0.8037 0.041 33.43);
+  --chart-5: oklch(0.62 0.03 263);
+
+  --sidebar: oklch(0.2055 0.0367 262.36); /* #0E1728 */
+  --sidebar-foreground: oklch(0.9288 0.0126 255.51);
+  --sidebar-primary: oklch(0.699 0.0884 145.03);
+  --sidebar-primary-foreground: oklch(0.1726 0.0247 149.33);
+  --sidebar-accent: oklch(0.3 0.055 152);
+  --sidebar-accent-foreground: oklch(0.9288 0.0126 255.51);
+  --sidebar-active-foreground: oklch(0.8124 0.0457 145.14);
+  --sidebar-border: oklch(0.3178 0.0462 263.59);
+  --sidebar-ring: oklch(0.7591 0.0629 145.64);
 }
 
 /* ------------------------------------------------------------- safe areas
@@ -186,6 +257,26 @@
   --color-input: var(--input);
   --color-ring: var(--ring);
 
+  /* PharmaFlow brand. Reach for these instead of a hex so a future rebrand is
+     one edit in `:root` rather than a grep across components. */
+  --color-brand-navy: var(--brand-navy);
+  --color-brand-blue: var(--brand-blue);
+  --color-brand-green: var(--brand-green);
+  --color-brand-green-2: var(--brand-green-2);
+
+  /* Navy for headings and structural text; green for the positive path. */
+  --color-navy: var(--navy);
+  --color-navy-soft: var(--navy-soft);
+  --color-navy-border: var(--navy-border);
+  --color-navy-foreground: var(--navy-foreground);
+
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-soft: var(--primary-soft);
+  --color-primary-soft-foreground: var(--primary-soft-foreground);
+
+  --color-table-head: var(--table-head);
+  --color-table-head-foreground: var(--table-head-foreground);
+
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
@@ -198,6 +289,7 @@
   --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
   --color-sidebar-accent: var(--sidebar-accent);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-active-foreground: var(--sidebar-active-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
 
@@ -226,10 +318,12 @@
     -webkit-tap-highlight-color: transparent;
   }
 
-  /* One focus treatment, keyboard-only. */
+  /* One focus treatment, keyboard-only. Offset is 1px rather than 2px so that
+     components which also draw their own ring produce a single clean green
+     outline instead of a doubled, heavy-looking border. */
   :focus-visible {
     outline: 2px solid var(--ring);
-    outline-offset: 2px;
+    outline-offset: 1px;
   }
   :focus:not(:focus-visible) {
     outline: none;

@@ -309,7 +309,7 @@ export function PrescriptionDialog({
           )}
 
           {(phase === 'idle' || phase === 'failed') && !aiOff && (
-            <div className="grid gap-2 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               {/* `capture` asks the OS for the rear lens on mobile. */}
               <input
                 ref={cameraRef}

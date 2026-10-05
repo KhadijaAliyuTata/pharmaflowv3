@@ -24,7 +24,8 @@ import {
   TableRow,
 } from '~/components/ui/table';
 import { Money, PageHeader, SectionTitle, StatTile } from '~/components/app/primitives';
-import { formatWhen, isoDate, money, multiply, sum } from '~/domain/money';
+import { formatCount, formatWhen, isoDate, money, multiply, sum } from '~/domain/money';
+import { findBaseUnit, findUnit } from '~/domain/units';
 import { usePharmacy, usePharmacyActions } from '~/store/pharmacy';
 import type { ReceiptStatus, StockMovementType } from '~/domain/types';
 
@@ -76,6 +77,14 @@ function StockReceiving() {
   const [supplierId, setSupplierId] = useState('');
   const [batchNumber, setBatchNumber] = useState('');
   const [quantity, setQuantity] = useState('');
+  /**
+   * Which packaging unit the count is in.
+   *
+   * A delivery note says "5 boxes" far more often than "500 tablets", so the
+   * unit is a first-class choice here rather than an assumption. Empty means
+   * "not chosen yet", which falls back to the base unit — the old behaviour.
+   */
+  const [receiveUnitKey, setReceiveUnitKey] = useState('');
   const [expiryDate, setExpiryDate] = useState(oneYearOut);
   const [costInput, setCostInput] = useState('');
   const [priceInput, setPriceInput] = useState('');
@@ -86,7 +95,16 @@ function StockReceiving() {
   const cost = money(Number(costInput) || 0);
   const price = money(Number(priceInput) || 0);
   const units = money(Number(quantity) || 0);
-  const value = multiply(cost, units);
+
+  const baseUnit = medicine ? findBaseUnit(medicine.units) : null;
+  const receiveUnit = medicine
+    ? findUnit(medicine.units, receiveUnitKey) ?? baseUnit
+    : null;
+
+  /** Live preview of what the entered count means in base units. */
+  const incomingBaseUnits =
+    medicine && receiveUnit && units > 0 ? multiply(receiveUnit.multiplier, units) : 0;
+  const value = multiply(cost, incomingBaseUnits);
 
   /**
    * A scan selects an existing product or reports that there isn't one.
@@ -119,7 +137,8 @@ function StockReceiving() {
     const result = receiveStock({
       medicineId,
       batchNumber,
-      baseUnitsReceived: units,
+      quantity: units,
+      unitKey: receiveUnit?.key ?? '',
       supplierId,
       expiryDate,
       ...(canPrice && costInput ? { costPerBaseUnit: cost } : {}),
@@ -150,7 +169,7 @@ function StockReceiving() {
     <div className="space-y-6">
       <PageHeader title="Stock Receiving" description="Book in a supplier delivery." />
 
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <StatTile
           label="Units on hand"
           value={sum(medicines.map((m) => m.totalQuantity)).toLocaleString('en-NG')}
@@ -171,7 +190,7 @@ function StockReceiving() {
         />
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-1">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm">New receipt</CardTitle>
@@ -223,7 +242,32 @@ function StockReceiving() {
                   />
                 </Field>
 
-                <div className="grid gap-4 sm:grid-cols-2">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <Field>
+                    <FieldLabel htmlFor="recv-unit">Counted in</FieldLabel>
+                    <Select
+                      value={receiveUnit?.key ?? ''}
+                      onValueChange={(value) => setReceiveUnitKey(value ?? '')}
+                      disabled={!medicine}
+                    >
+                      <SelectTrigger id="recv-unit" className="h-10">
+                        <SelectValue placeholder={medicine ? 'Choose a unit' : 'Pick a product first'} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {(medicine?.units ?? []).map((unit) => (
+                          <SelectItem key={unit.key} value={unit.key}>
+                            {unit.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {medicine && baseUnit && (
+                      <p className="text-xs text-muted-foreground">
+                        Base unit is {baseUnit.name}. Everything is stored in {baseUnit.name.toLowerCase()}s.
+                      </p>
+                    )}
+                  </Field>
+
                   <Field>
                     <FieldLabel htmlFor="recv-qty">Quantity</FieldLabel>
                     <div className="flex items-center gap-2">
@@ -233,7 +277,9 @@ function StockReceiving() {
                         size="icon"
                         className="size-10"
                         onClick={() =>
-                          setQuantity(String(Math.max(0, units - (medicine?.units[0]?.multiplier ?? 1))))
+                          setQuantity(
+                            String(Math.max(0, units - (receiveUnit?.multiplier ?? 1))),
+                          )
                         }
                         aria-label="Decrease quantity"
                       >
@@ -255,17 +301,33 @@ function StockReceiving() {
                         size="icon"
                         className="size-10"
                         onClick={() =>
-                          setQuantity(String(units + (medicine?.units[0]?.multiplier ?? 1)))
+                          setQuantity(String(units + (receiveUnit?.multiplier ?? 1)))
                         }
                         aria-label="Increase quantity"
                       >
                         <Plus />
                       </Button>
                     </div>
+                    {/* The conversion is shown as it happens. An attendant
+                        keying in "5" must be able to see that this means 500
+                        before they commit, not discover it on the batch. */}
+                    {medicine && receiveUnit && units > 0 && (
+                      <p className="text-xs text-muted-foreground">
+                        {formatCount(units)} × {receiveUnit.name} ={' '}
+                        <span data-numeric className="tabular font-medium text-foreground">
+                          {formatCount(incomingBaseUnits)}
+                        </span>
+                        {baseUnit ? ` × ${baseUnit.name}` : ' base units'}
+                      </p>
+                    )}
                     {medicine && (
                       <p className="text-xs text-muted-foreground">
-                        In {medicine.units[0]?.name ?? 'base units'} —{' '}
-                        {medicine.totalQuantity} on hand
+                        {/* "480 × Tablet on hand" rather than "480 tablet" —
+                            lowercasing a unit name reads as a typo, and unit
+                            names legitimately carry counts ("Bottle (100ml)") so
+                            pluralising them is not safe either. */}
+                        {formatCount(medicine.totalQuantity)}
+                        {baseUnit ? ` × ${baseUnit.name} on hand` : ' base units on hand'}
                       </p>
                     )}
                   </Field>
@@ -299,7 +361,7 @@ function StockReceiving() {
                 </Field>
 
                 {canPrice && (
-                  <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <Field>
                       <FieldLabel htmlFor="recv-cost">Cost per base unit</FieldLabel>
                       <Input
@@ -328,7 +390,7 @@ function StockReceiving() {
                 )}
 
                 {!canPrice && (
-                  <p className="rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm">
+                  <p className="rounded-lg border border-warning-border bg-warning-subtle p-3 text-sm">
                     Assistants book stock in but cannot price it. This receipt goes to the owner
                     for approval.
                   </p>

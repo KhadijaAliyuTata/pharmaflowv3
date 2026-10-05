@@ -107,7 +107,7 @@ function SettingsScreen() {
             None of these are implemented. There is nothing to turn on.
           </p>
 
-          <div className="grid gap-3 lg:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
             {INTEGRATIONS.map((integration) => {
               const Icon = integration.icon;
 
@@ -160,7 +160,7 @@ function SettingsScreen() {
           </div>
         </CardHeader>
         <CardContent>
-          <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <dl className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <Detail icon={<Store />} label="Branch">
               {branch.name}
               {branch.isMainHub && (

@@ -7,6 +7,7 @@ import { Card, CardContent } from '~/components/ui/card';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '~/components/ui/empty';
 import { PortalSearchBox } from '~/components/portal-search';
 import { Money, StatusBadge } from '~/components/app/primitives';
+import { findBaseUnit } from '~/domain/units';
 import { searchMedicines } from '~/domain/selectors';
 import { availabilityFor, usePortalCustomer } from '~/lib/portal';
 import { usePharmacy } from '~/store/pharmacy';
@@ -85,6 +86,7 @@ function PortalSearch() {
               {results.map((medicine) => {
                 const availability = availabilityFor(medicine, branch);
                 const prescriptionOnly = medicine.prescriptionStatus !== 'OTC';
+                const portalBaseUnit = findBaseUnit(medicine.units);
 
                 return (
                   <li key={medicine.id}>
@@ -112,12 +114,22 @@ function PortalSearch() {
                           )}
                         </div>
 
-                        <dl className="grid gap-2 text-xs sm:grid-cols-2">
+                        <dl className="grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">
                           <div>
                             <dt className="text-muted-foreground">Price from</dt>
                             <dd className="text-sm font-medium">
-                              <Money value={medicine.units[0]?.sellingPrice ?? 0} /> per{' '}
-                              {medicine.units[0]?.name.toLowerCase() ?? 'unit'}
+                              {/* The base unit's price, found by conversion rather
+                                  than by position. `?? 0` would have shown a free
+                                  product to every customer whose record happened to
+                                  be malformed. */}
+                              {portalBaseUnit ? (
+                                <>
+                                  <Money value={portalBaseUnit.sellingPrice} /> per{' '}
+                                  {portalBaseUnit.name.toLowerCase()}
+                                </>
+                              ) : (
+                                'Not available'
+                              )}
                             </dd>
                           </div>
                           <div>

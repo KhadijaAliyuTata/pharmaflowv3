@@ -52,6 +52,20 @@ export interface Branch {
   rating: number;
   reviewsCount: number;
   isMainHub?: boolean;
+
+  /**
+   * Pharmacy Council of Nigeria registration number for this pharmacy.
+   *
+   * Optional because no branch has one configured yet, and the screen must say
+   * "Not set" rather than invent a number on a compliance surface. This is the
+   * *pharmacy's* registration — `User.licenseNumber` is a staff member's own
+   * licence and is deliberately a separate thing. Added to the schema by
+   * migration 20261005160000_branch_registration.
+   */
+  pcnNumber?: string;
+
+  /** Physical premises registration number. Same "Not set" rule as `pcnNumber`. */
+  premisesNumber?: string;
 }
 
 /** Everything a user can do, gathered for the role switcher and audit log. */

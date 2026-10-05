@@ -8,7 +8,7 @@ const badgeVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground [a]:hover:bg-primary/80",
+        default: "bg-primary text-primary-foreground [a]:hover:bg-primary-hover",
         secondary:
           "bg-secondary text-secondary-foreground [a]:hover:bg-secondary/80",
         destructive:
@@ -18,14 +18,23 @@ const badgeVariants = cva(
         ghost:
           "hover:bg-muted hover:text-muted-foreground dark:hover:bg-muted/50",
         link: "text-primary underline-offset-4 hover:underline",
-        // Semantic status variants, added because this app has real state to
-        // label (in stock / expiring / on credit) and `destructive` cannot
-        // carry a positive state. They reuse `destructive`'s tinted treatment
-        // so all three read at the same weight.
+        // Semantic status variants. This app has real state to label (in stock /
+        // expiring / on credit) and `destructive` cannot carry a positive state.
+        //
+        // Each pairs a *tint* background with the full-strength semantic text
+        // colour rather than a `/10` background with a `/10` foreground, which is
+        // how you end up with grey-on-grey pills. Text stays legible and the
+        // label is always present, so state never rests on colour alone.
         success:
-          "bg-success/10 text-success focus-visible:ring-success/20 dark:bg-success/20 dark:focus-visible:ring-success/40 [a]:hover:bg-success/20",
+          "border-success-border bg-success-subtle text-success focus-visible:ring-success/20 dark:focus-visible:ring-success/40 [a]:hover:bg-success-subtle/70",
         warning:
-          "bg-warning/10 text-warning focus-visible:ring-warning/20 dark:bg-warning/20 dark:focus-visible:ring-warning/40 [a]:hover:bg-warning/20",
+          "border-warning-border bg-warning-subtle text-warning focus-visible:ring-warning/20 dark:focus-visible:ring-warning/40 [a]:hover:bg-warning-subtle/70",
+        danger:
+          "border-danger-border bg-danger-subtle text-destructive focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 [a]:hover:bg-danger-subtle/70",
+        info: "border-info-border bg-info-subtle text-info focus-visible:ring-info/20 dark:focus-visible:ring-info/40 [a]:hover:bg-info-subtle/70",
+        neutral:
+          "border-border bg-muted text-muted-foreground focus-visible:ring-ring/30 [a]:hover:bg-muted/70",
+        brand: "border-navy-border bg-navy-soft text-navy dark:border-navy-border dark:bg-navy-soft dark:text-brand-navy",
       },
     },
     defaultVariants: {

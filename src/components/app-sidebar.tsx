@@ -28,6 +28,7 @@ import {
 } from '~/components/ui/sidebar';
 import { Avatar, AvatarFallback } from '~/components/ui/avatar';
 import { BRAND, ROLE_LABEL, sectionsForRole } from '~/lib/nav';
+import { useBranchName } from '~/lib/supabase/branch-context';
 import { DEMO_ACCOUNTS, isDemoMode, signOut, switchRole, useSession } from '~/lib/session';
 import type { Role } from '~/domain/types';
 
@@ -61,6 +62,9 @@ export function AppSidebar({
   // what the screens themselves gate on, so the two agree after mount.
   const role: Role = user?.role ?? 'owner';
   const name = userName ?? user?.name ?? 'Signed out';
+  // Compatibility boundary: prefer the branch Supabase resolved, fall back to the
+  // prototype's own (localStorage) value. Display only - never a security input.
+  const resolvedBranchName = useBranchName();
   const sections = sectionsForRole(role);
 
   const onSignOut = () => {
@@ -84,7 +88,7 @@ export function AppSidebar({
               <div className="grid flex-1 text-left leading-tight">
                 <span className="truncate text-sm font-semibold">{BRAND.name}</span>
                 <span className="truncate text-xs text-muted-foreground">
-                  {branchName}
+                  {resolvedBranchName ?? branchName}
                 </span>
               </div>
             </SidebarMenuButton>
@@ -201,7 +205,7 @@ export function AppSidebar({
               <Button
                 variant="ghost"
                 size="icon"
-                className="size-8 shrink-0 text-muted-foreground hover:text-destructive-foreground hover:bg-destructive/10"
+                className="size-8 shrink-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                 aria-label="Sign out"
                 title="Sign out"
                 onClick={onSignOut}

@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import { Moon, Sun } from 'lucide-react';
 import {
   Command,
   CommandDialog,
@@ -9,18 +8,31 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
-  CommandSeparator,
-  CommandShortcut,
 } from '~/components/ui/command';
 import { itemsForRole, type Role } from '~/lib/nav';
-import { useTheme } from '~/lib/theme';
 
 /**
  * ⌘K palette over the installed `command` + `dialog` primitives.
  *
- * v2's Navbar advertised "Search medicines, transactions, staff... (⌘K)" in its
- * placeholder but had no implementation behind it. This delivers the screen
- * half of it; record-level search arrives with the ported screens.
+ * ## This navigates screens. It does not search records.
+ *
+ * Those are two different jobs and the app now keeps them in two different
+ * components:
+ *
+ *  - **This** (`mod+k`) jumps to a screen.
+ *  - `~/components/app/global-search.tsx` searches medicines, suppliers, staff
+ *    and customers, and is what the header's search control opens.
+ *
+ * ## Why there is no theme item here
+ *
+ * There used to be a "Preferences → Switch to light/dark" row bound to
+ * `toggleTheme`. It was reachable by typing anything in the header's search
+ * control, because that control opened this palette — so a search could flip the
+ * application's theme, which is both surprising and a genuine bug. The theme is
+ * now changed in exactly one place, `ThemeToggle` in the header, and neither
+ * this palette nor the global search imports the theme at all. Keeping the
+ * control out of the palette makes "searching changes the theme" structurally
+ * impossible rather than merely unlikely.
  *
  * Filtering is done here rather than by the primitive (`shouldFilter={false}`)
  * because the haystack includes each item's extra `keywords`, which
@@ -36,7 +48,6 @@ export function CommandMenu({
   role?: Role;
 }) {
   const navigate = useNavigate();
-  const { theme, toggleTheme } = useTheme();
   const [query, setQuery] = useState('');
 
   // Clear the query on close so the palette never reopens mid-search.
@@ -63,8 +74,8 @@ export function CommandMenu({
     <CommandDialog
       open={open}
       onOpenChange={onOpenChange}
-      title="Command menu"
-      description="Jump to a screen or change a preference"
+      title="Go to screen"
+      description="Jump to a screen. To search records, use the search control in the header."
     >
       {/* shouldFilter lives on Command, not CommandDialog — the dialog is
           only a Dialog wrapper. cmdk's matcher does not know about our extra
@@ -85,16 +96,6 @@ export function CommandMenu({
                 <span>{item.label}</span>
               </CommandItem>
             ))}
-          </CommandGroup>
-
-          <CommandSeparator />
-
-          <CommandGroup heading="Preferences">
-            <CommandItem value="toggle-theme" onSelect={() => run(toggleTheme)}>
-              {theme === 'dark' ? <Sun /> : <Moon />}
-              Switch to {theme === 'dark' ? 'light' : 'dark'}
-              <CommandShortcut>T</CommandShortcut>
-            </CommandItem>
           </CommandGroup>
         </CommandList>
       </Command>

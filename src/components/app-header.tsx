@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
-import { Bell, LogOut, Search } from 'lucide-react';
+import { toast } from 'sonner';
+import { Bell, Command, LogOut, Search, Store } from 'lucide-react';
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -17,6 +18,8 @@ import {
   DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '~/components/ui/dropdown-menu';
@@ -24,8 +27,14 @@ import { Separator } from '~/components/ui/separator';
 import { SidebarTrigger } from '~/components/ui/sidebar';
 import { Kbd } from '~/components/ui/kbd';
 import { ThemeToggle } from '~/components/theme-toggle';
-import { findNavItem, type Role } from '~/lib/nav';
+import { findNavItem, ROLE_LABEL, type Role } from '~/lib/nav';
 import { signOut, useSession } from '~/lib/session';
+import {
+  activeBranch,
+  hasMultipleBranches,
+  switchActiveBranch,
+  useActiveBranch,
+} from '~/lib/supabase/branch-context';
 
 /** Same two-letter treatment the sidebar footer uses, so the two match. */
 function initials(name: string): string {
@@ -47,15 +56,20 @@ function initials(name: string): string {
  */
 export function AppHeader({
   role = 'owner',
+  onOpenSearch,
   onOpenCommand,
 }: {
   role?: Role;
+  /** Opens the record search (medicines, suppliers, staff, customers). */
+  onOpenSearch: () => void;
+  /** Opens the screen-jump palette (⌘K). */
   onOpenCommand: () => void;
 }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const current = findNavItem(pathname);
   const [isMac, setIsMac] = useState(false);
   const { user } = useSession();
+  const { currentBranchId, availableBranches } = useActiveBranch();
   const navigate = useNavigate();
   const name = user?.name ?? 'Signed in';
 
@@ -90,16 +104,18 @@ export function AppHeader({
       </Breadcrumb>
 
       <div className="ml-auto flex items-center gap-1">
-        {/* Renders as a button; ⌘K handling lives in the CommandMenu. */}
+        {/* Record search. This is the real search over medicines, suppliers,
+            staff and customers — independent of the theme toggle, which lives
+            two buttons along and is never wired to this control. */}
         <Button
           variant="outline"
           size="sm"
           className="hidden h-8 gap-2 text-muted-foreground md:flex"
-          onClick={onOpenCommand}
+          onClick={onOpenSearch}
         >
           <Search className="size-3.5" />
           Search
-          <Kbd className="ml-1">{isMac ? '⌘' : 'Ctrl '}K</Kbd>
+          <Kbd className="ml-1">/</Kbd>
         </Button>
 
         <Button
@@ -107,9 +123,21 @@ export function AppHeader({
           size="icon"
           className="size-8 md:hidden"
           aria-label="Search"
-          onClick={onOpenCommand}
+          onClick={onOpenSearch}
         >
           <Search className="size-4" />
+        </Button>
+
+        {/* Screen-jump palette, kept on ⌘K so the previous shortcut still works.
+            It is a separate control from record search, not the same one. */}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="hidden size-8 lg:inline-flex"
+          aria-label={`Go to screen (${isMac ? 'Command' : 'Ctrl'} K)`}
+          onClick={onOpenCommand}
+        >
+          <Command className="size-4" />
         </Button>
 
         <Button variant="ghost" size="icon" className="size-8" aria-label="Notifications">
@@ -137,11 +165,44 @@ export function AppHeader({
             </Avatar>
           </DropdownMenuTrigger>
 
-          <DropdownMenuContent align="end" className="w-56">
+          <DropdownMenuContent align="end" className="w-60">
             {/* Base UI requires every label to sit inside a Group. */}
             <DropdownMenuGroup>
               <DropdownMenuLabel>{name}</DropdownMenuLabel>
             </DropdownMenuGroup>
+
+            {/* Multi-branch. Renders only when this session may open more than one
+                counter, so a single-branch pharmacy sees exactly what it saw
+                before. The list comes from `pf_my_branches`, so it cannot contain
+                a branch this session is not entitled to. */}
+            {hasMultipleBranches() && (
+              <DropdownMenuGroup>
+                <DropdownMenuLabel>Branch</DropdownMenuLabel>
+                <DropdownMenuRadioGroup
+                  value={currentBranchId ?? ''}
+                  onValueChange={(value) => {
+                    void (async () => {
+                      const next = await switchActiveBranch(value);
+                      if (!next.ok) {
+                        toast.error(next.error);
+                        return;
+                      }
+                      toast.success(`Switched to ${activeBranch()?.name ?? 'branch'}`);
+                    })();
+                  }}
+                >
+                  {availableBranches.map((branch) => (
+                    <DropdownMenuRadioItem key={branch.id} value={branch.id}>
+                      <Store />
+                      <span className="truncate">{branch.name}</span>
+                      <span className="ml-auto text-xs text-muted-foreground">
+                        {ROLE_LABEL[branch.role]}
+                      </span>
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuGroup>
+            )}
 
             <DropdownMenuSeparator />
 

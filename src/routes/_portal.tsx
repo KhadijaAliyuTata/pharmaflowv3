@@ -11,6 +11,7 @@ import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
 import { PORTAL_NAV } from '~/lib/portal';
 import { peekSession, useSession } from '~/lib/session';
+import { useBranchName } from '~/lib/supabase/branch-context';
 import { usePharmacy } from '~/store/pharmacy';
 
 /**
@@ -46,7 +47,11 @@ export const Route = createFileRoute('/_portal')({
 
 function PortalShell() {
   const { status } = useSession();
-  const branch = usePharmacy((state) => state.branch);
+  const storedBranch = usePharmacy((state) => state.branch);
+  // Compatibility boundary, same as the sidebar: Supabase first, the prototype's
+  // localStorage branch as fallback. Display only.
+  const activeBranchName = useBranchName();
+  const branchName = activeBranchName ?? storedBranch.name;
   const pathname = useRouterState({ select: (state) => state.location.pathname });
 
   // Below the other hooks on purpose: an early return above them would be a
@@ -68,7 +73,7 @@ function PortalShell() {
           {/* Which counter this portal is pointed at. One branch exists in the
               state today, so there is no branch picker to offer. */}
           <span className="text-muted-foreground hidden truncate text-xs md:inline">
-            {branch.name}
+            {branchName}
           </span>
 
           <Badge variant="secondary" className="hidden sm:inline-flex">

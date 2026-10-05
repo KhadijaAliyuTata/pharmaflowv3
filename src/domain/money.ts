@@ -31,6 +31,26 @@ export function sum(values: number[]): number {
   return add(...values);
 }
 
+/**
+ * Sums values that may be unknown, returning null if any of them is.
+ *
+ * The reason this exists rather than just filtering: cost is owner-only in the
+ * database, so some figures are legitimately unavailable to a given session.
+ * Summing only the known rows produces a *smaller* number that still looks like
+ * a total — understating capital at risk, or overstating margin. Refusing to
+ * answer is the only safe option.
+ *
+ * An empty list sums to 0, which is genuinely correct: nothing to price.
+ */
+export function sumKnown(values: (number | null | undefined)[]): number | null {
+  const known: number[] = [];
+  for (const value of values) {
+    if (value === null || value === undefined || !Number.isFinite(value)) return null;
+    known.push(value);
+  }
+  return sum(known);
+}
+
 /** Percentage of `part` against `whole`. Guards against divide-by-zero. */
 export function percentOf(part: number, whole: number): number {
   if (whole === 0) return 0;
