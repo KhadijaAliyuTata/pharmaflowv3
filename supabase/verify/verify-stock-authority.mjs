@@ -182,6 +182,89 @@ section('POSITIVE: a genuine authenticated sale still deducts stock');
   );
 }
 
+section('NEGATIVE: the depletion trigger refuses a foreign lot even when it can see it');
+{
+  // Two distinct layers, tested separately.
+  //
+  //  Layer 1 (pre-existing): `pf_check_sale_item_batch` is SECURITY INVOKER, so
+  //  RLS hides a foreign lot and the BEFORE trigger rejects the line outright.
+  //  That is what an ordinary caller actually meets.
+  //
+  //  Layer 2 (added by 0b): the depletion trigger is SECURITY DEFINER, so RLS does
+  //  NOT apply to it. If it relied on layer 1 alone it would be one RLS change away
+  //  from being the hole it was. This case is written as trusted bootstrap — no
+  //  JWT, so layer 1 is not in the way — which isolates layer 2 and proves the
+  //  check exists on its own rather than as a passenger.
+  await database.query(`select set_actor(null)`);
+
+  const [sale] = await query(
+    database,
+    `insert into sales (branch_id, receipt_number, subtotal, total, attendant_id, payment_method, amount_paid, state)
+     values ($1, 'RCP-ISOLATED', 100, 100, $2, 'cash', 100, 'paid') returning id`,
+    [ids.BRANCH_A, ids.ASSISTANT_A],
+  );
+
+  const before = await quantityOf(tenantB.batchId);
+  let refused = false;
+  let err = '';
+  try {
+    await query(
+      database,
+      `insert into sale_items (sale_id, medicine_id, medicine_name, generic_name, unit_key, unit_name,
+                              unit_multiplier, unit_price, quantity, base_units_total, line_total,
+                              batch_id, cost_per_base_unit_snapshot)
+       values ($1, $2, 'Test Drug', 'testgen', 'tablet', 'Tablet', 1, 100, 10, 10, 1000, $3, 50)`,
+      [sale.id, tenantB.medicineId, tenantB.batchId],
+    );
+  } catch (e) {
+    refused = true;
+    err = String(e?.message ?? e).split('\n')[0].slice(0, 140);
+  }
+  const after = await quantityOf(tenantB.batchId);
+  check(
+    'the depletion trigger itself refuses a foreign lot, independent of RLS',
+    refused && after === before,
+    refused
+      ? `refused (${err}); foreign lot unchanged at ${after}`
+      : `ACCEPTED — a SECURITY DEFINER trigger mutated another tenant's stock (${before} -> ${after})`,
+  );
+}
+{
+  // The deduction trigger is SECURITY DEFINER, so it updates batches with RLS out
+  // of the way — which means IT is responsible for refusing a foreign lot.
+  // batch_id is client-supplied, and the pre-existing batch check only proves the
+  // lot matches the line's *medicine*, not its *branch*.
+  await database.query(`select set_actor($1)`, [ids.ASSISTANT_A]);
+
+  const [sale] = await query(
+    database,
+    `insert into sales (branch_id, receipt_number, subtotal, total, attendant_id, payment_method, amount_paid, state)
+     values ($1, 'RCP-FOREIGN-LOT', 100, 100, $2, 'cash', 100, 'paid') returning id`,
+    [ids.BRANCH_A, ids.ASSISTANT_A],
+  );
+
+  // tenantB's medicine and its lot, referenced from branch A's sale.
+  const r = await asAuthenticated(database, () =>
+    query(
+      database,
+      `insert into sale_items (sale_id, medicine_id, medicine_name, generic_name, unit_key, unit_name,
+                              unit_multiplier, unit_price, quantity, base_units_total, line_total,
+                              batch_id, cost_per_base_unit_snapshot)
+       values ($1, $2, 'Test Drug', 'testgen', 'tablet', 'Tablet', 1, 100, 10, 10, 1000, $3, 50)
+       returning id`,
+      [sale.id, tenantB.medicineId, tenantB.batchId],
+    ),
+  );
+  const qty = await quantityOf(tenantB.batchId);
+  check(
+    "a sale line naming another tenant's lot is refused",
+    !r.ok && qty === 500,
+    r.ok
+      ? `ACCEPTED and the foreign lot became ${qty} — cross-tenant stock mutation`
+      : `refused (${r.err}); foreign lot still ${qty}`,
+  );
+}
+
 section('POSITIVE: stock cannot be driven negative');
 {
   const overdrawHeader = await asAuthenticated(database, () =>
