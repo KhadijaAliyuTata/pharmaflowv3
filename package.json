@@ -10,6 +10,7 @@
     "deploy:watch": "wrangler deploy -c dist/server/wrangler.json",
     "cf-typegen": "wrangler types",
     "typecheck": "tsc --noEmit",
+    "verify:db": "bun run supabase/verify/run-all.mjs",
     "check": "bun run typecheck && bun run build"
   },
   "dependencies": {
@@ -44,6 +45,7 @@
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.61.0",
+    "@electric-sql/pglite": "0.5.8",
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^26.6.3",
     "@types/react": "^19.3.0",
