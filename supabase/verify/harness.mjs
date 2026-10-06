@@ -11,9 +11,15 @@
  *     fail with "permission denied", and the suite reports a write path as broken
  *     when it is not. This produced three false findings during the audit.
  *
- *  2. Reset the role in a `finally`. A statement that raises aborts the
- *     transaction, and every later statement then fails, so one failure silently
- *     invalidates every check after it.
+ *  2. Reset the role in a `finally`. The role reset is the part that matters: a
+ *     suite that leaves `set role authenticated` in place silently filters its
+ *     own later "server-role" reads through RLS and sees empty tables.
+ *
+ *     The ROLLBACK half of `asRole` is a no-op in PGlite. It runs in autocommit,
+ *     so each statement is its own implicit transaction and a failed statement
+ *     cannot abort a later one. That was verified directly rather than assumed,
+ *     after a transaction-poisoning theory turned out to be wrong and sent the
+ *     audit investigation down the wrong path. Real isolation comes from rule 3.
  *
  *  3. A fresh database per scenario group, so one poisoned transaction cannot
  *     contaminate later groups.
@@ -116,18 +122,25 @@ export async function applyMigrationTo(db, file) {
 }
 
 /**
- * Rule 2: run as `role`, always restore it, always recover the transaction.
+ * Rule 2: run as `role`, always restore it, always attempt to recover.
  *
- * Catching an error is not enough on its own. PostgreSQL aborts the whole
- * transaction on the first failure, so after a *caught* error every subsequent
- * statement fails with "current transaction is aborted" until something issues a
- * ROLLBACK. Without the rollback below, one refused write silently poisons the
- * rest of the suite — which is how a correctly-refused INSERT came to be
- * reported as ACCEPTED: the transaction was already dead before it ran.
+ * The role reset is load-bearing. If `set role` were left in place, every later
+ * "server-role" read in a suite would still be evaluated as `authenticated` and
+ * silently filtered by RLS, so a correct query would look like an empty table.
  *
- * The rollback is issued while still in the role, because the connection may
- * need the role's privileges to perform it in some configurations; it is
- * harmless either way since ROLLBACK needs no table access.
+ * The rollback is defensive rather than load-bearing here. It was originally
+ * written because catching an error without one leaves a PostgreSQL transaction
+ * aborted, so every later statement fails with "current transaction is aborted".
+ * That is true of a client that wraps statements in an explicit transaction, and
+ * false of PGlite, which runs in autocommit: each statement is its own implicit
+ * transaction, so a failed statement cannot affect a later one. Verified
+ * directly — `select 1/0` followed by `select 1` succeeds with no manual
+ * rollback.
+ *
+ * The rollback is kept because it is harmless and because it makes this helper
+ * correct against a real Postgres connection, which a future suite may use for
+ * real-project verification. It must not be counted on for isolation: see rule 3
+ * and `verify-audit-integrity.mjs`, which gives each case a fresh database.
  */
 export async function asRole(db, role, fn) {
   await db.exec(`set role ${role}`);
@@ -135,11 +148,12 @@ export async function asRole(db, role, fn) {
     return { ok: true, value: await fn() };
   } catch (e) {
     const err = String(e?.message ?? e).split('\n')[0].slice(0, 200);
-    // Recover the session before returning, so the caller can keep asserting.
+    // Attempt to recover the session. A no-op under autocommit; meaningful if a
+    // transaction is ever opened explicitly around a call.
     try {
       await db.exec('rollback');
     } catch {
-      /* already clean */
+      /* nothing to roll back */
     }
     return { ok: false, err };
   } finally {
