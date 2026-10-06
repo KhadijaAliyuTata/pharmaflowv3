@@ -174,28 +174,33 @@ export function AppSidebar({
                   </DropdownMenuGroup>
 
                   {/* Demo only. Real role changes are an audited action, not a
-                      self-service dropdown. */}
-                  <DropdownMenuGroup>
-                    <DropdownMenuLabel>Act as</DropdownMenuLabel>
-                    <DropdownMenuRadioGroup
-                      value={role}
-                      onValueChange={(value) => {
-                        // Only available in demo mode. With Supabase, a role is
-                        // a row in `profiles` guarded by RLS — a self-service
-                        // switch would let anyone promote themselves.
-                        const next: Role = value;
-                        switchRole(next);
-                        toast.success(`Viewing as ${ROLE_LABEL[next]}`);
-                      }}
-                    >
-                      {DEMO_ACCOUNTS.map((account) => (
-                        <DropdownMenuRadioItem key={account.role} value={account.role}>
-                          <UserRound />
-                          {ROLE_LABEL[account.role]}
-                        </DropdownMenuRadioItem>
-                      ))}
-                    </DropdownMenuRadioGroup>
-                  </DropdownMenuGroup>
+                      self-service dropdown. Gated because rendering it on live
+                      Supabase advertised the seeded roles and invited a user to
+                      promote themselves; `switchRole` throws there, so it was a dead
+                      control that looked like a privilege-escalation path. */}
+                  {isDemoMode() && (
+                    <DropdownMenuGroup>
+                      <DropdownMenuLabel>Act as</DropdownMenuLabel>
+                      <DropdownMenuRadioGroup
+                        value={role}
+                        onValueChange={(value) => {
+                          // Only reachable in demo mode. With Supabase, a role is a row
+                          // in `profiles` guarded by RLS, and changing it is an audited
+                          // action — `switchRole` throws outside a demo session.
+                          const next: Role = value;
+                          switchRole(next);
+                          toast.success(`Viewing as ${ROLE_LABEL[next]}`);
+                        }}
+                      >
+                        {DEMO_ACCOUNTS.map((account) => (
+                          <DropdownMenuRadioItem key={account.role} value={account.role}>
+                            <UserRound />
+                            {ROLE_LABEL[account.role]}
+                          </DropdownMenuRadioItem>
+                        ))}
+                      </DropdownMenuRadioGroup>
+                    </DropdownMenuGroup>
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
 
@@ -216,10 +221,16 @@ export function AppSidebar({
           </SidebarMenuItem>
         </SidebarMenu>
 
-        <p className="flex items-center gap-1.5 px-2 text-xs text-muted-foreground">
-          <ShieldCheck className="size-3" />
-          Demo build
-        </p>
+        {/* Only meaningful when a demo session is actually available. Rendered
+            unconditionally it told a live Supabase user their real deployment was a
+            "Demo build", which is both wrong and alarming. `isDemoMode()` is
+            `DEMO_ALLOWED && DEMO_MODE`, so this is false in every production build. */}
+        {isDemoMode() && (
+          <p className="flex items-center gap-1.5 px-2 text-xs text-muted-foreground">
+            <ShieldCheck className="size-3" />
+            Demo build
+          </p>
+        )}
         <SidebarRail />
       </SidebarFooter>
     </Sidebar>

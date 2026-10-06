@@ -34,7 +34,7 @@ import { Skeleton } from '~/components/ui/skeleton';
 import { Toaster } from '~/components/ui/sonner';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '~/components/ui/tabs';
 import { BRAND } from '~/lib/nav';
-import { DEMO_ACCOUNTS, configProblem, signIn, useSession } from '~/lib/session';
+import { DEMO_ACCOUNTS, configProblem, isDemoMode, signIn, useSession } from '~/lib/session';
 
 /**
  * Sign in. One route, two tabs, two form components.
@@ -234,12 +234,20 @@ function StaffSignInForm() {
           <ForgotPassword />
         </div>
 
-        <DemoAccounts
-          onPick={(account) => {
-            form.setValue('email', account.email, { shouldValidate: true });
-            form.setValue('password', 'demo', { shouldValidate: true });
-          }}
-        />
+        {/* Seeded accounts and the "any password" hint describe a sign-in that only
+            exists when the demo session is actually available. Showing them on a live
+            Supabase deployment tells a real user that any password is accepted, which
+            it is not: `signIn` goes to Supabase here and the password is simply
+            rejected. `isDemoMode()` is `DEMO_ALLOWED && DEMO_MODE`, so this is also
+            false in every production build regardless of the flag. */}
+        {isDemoMode() && (
+          <DemoAccounts
+            onPick={(account) => {
+              form.setValue('email', account.email, { shouldValidate: true });
+              form.setValue('password', 'demo', { shouldValidate: true });
+            }}
+          />
+        )}
       </form>
     </Form>
   );

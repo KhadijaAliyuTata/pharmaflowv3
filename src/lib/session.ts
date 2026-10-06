@@ -124,7 +124,7 @@ const IS_DEV_BUILD = __DEV_SERVER__ === true;
  * Deliberately a direct comparison against the build-time substitution rather than
  * a derived value from `resolveDeploymentMode()`. That matters: given
  * `import.meta.env.DEV === false` in the output, a minifier folds this to the
- * literal `false`, and every `if (DEMO_ALLOWED)` branch below becomes dead code
+ * literal `false`, and every branch below gated on it becomes dead code
  * that is dropped. `DEMO_USERS` then has no remaining reader, so
  * `~/lib/demo-fixtures` is tree-shaken out of the bundle.
  *
@@ -137,6 +137,13 @@ const IS_DEV_BUILD = __DEV_SERVER__ === true;
  *
  * `switchRole` is gated on the same constant for the same reason: it is a role
  * elevation control, and it must not survive into shipped code either.
+ *
+ * Read this constant as a necessary condition, never a sufficient one. It says
+ * "this bundle came from a development server", not "demo mode is on", and the two
+ * come apart on a dev server that also has a real Supabase project configured.
+ * Every demo code path is therefore gated on `DEMO_SESSION` below, which is this
+ * AND `DEMO_MODE`. Using this constant on its own was a fail-open: the app booted
+ * authenticated as the seeded owner on a fully configured dev server.
  */
 const DEMO_ALLOWED = IS_DEV_BUILD;
 
@@ -264,10 +271,23 @@ export interface Session {
  * 'authenticated' after Supabase says so. An unconfigured one begins
  * 'unconfigured' and can never become authenticated at all.
  */
-// Gated on DEMO_ALLOWED rather than DEMO_MODE so that this ternary folds away in a
-  // production build and `DEMO_USERS` loses its last reader, which is what lets
-  // `~/lib/demo-fixtures` be dropped from the bundle. See the note on DEMO_ALLOWED.
-  let current: Session = DEMO_ALLOWED
+// DEMO_SESSION, not DEMO_ALLOWED.
+//
+//   `DEMO_ALLOWED` is `IS_DEV_BUILD`, which is true on ANY development server. Using
+//   it here meant a dev server with a real Supabase project configured still booted
+//   'authenticated' as the seeded owner: the route guard passed, the owner dashboard
+//   rendered, and Supabase was never consulted. That is the fail-open this whole
+//   rewrite exists to remove, reintroduced through the side door of the
+//   bundler-friendly gate.
+//
+//   `DEMO_ALLOWED && DEMO_MODE` is both correct and still foldable. In a production
+//   build `DEMO_ALLOWED` is the literal `false`, so the expression folds to `false`,
+//   this branch is eliminated, and the demo credentials are dropped from the bundle
+//   with it — exactly the property DEMO_ALLOWED was introduced for, without losing the
+//   meaning.
+const DEMO_SESSION = DEMO_ALLOWED && DEMO_MODE;
+
+let current: Session = DEMO_SESSION
   ? { user: DEMO_USERS[0]!, status: 'authenticated', offline: false }
   : { user: null, status: isSupabaseConfigured() ? 'loading' : 'anonymous', offline: false };
 
@@ -364,7 +384,7 @@ export function startSession(): void {
   // `vite build`, so it cannot sign anybody in — the auto-login that used to sit
   // here was the largest single authentication bypass in the codebase, and it is
   // now unreachable outside a development server.
-  if (DEMO_ALLOWED) {
+  if (DEMO_SESSION) {
     // Development server only. Whoever opens the URL is signed straight in as the
     // owner so the interface is visible immediately. There is no backend here.
     const cached = readCache();
@@ -521,7 +541,7 @@ export async function signIn(
   // The `password.trim().length === 0` test is a form-shape check, not an
   // authentication check. Both failures return the same message so the form cannot
   // be used to discover which seeded addresses exist.
-  if (DEMO_ALLOWED) {
+  if (DEMO_SESSION) {
     const needle = email.trim().toLowerCase();
     const user = DEMO_USERS.find((u) => u.email.toLowerCase() === needle);
     if (!user || password.trim().length === 0) {
@@ -667,7 +687,7 @@ export function signOut(): void {
  * action in the staff screen.
  */
 export function switchRole(role: User['role']): void {
-  if (!DEMO_ALLOWED) {
+  if (!DEMO_SESSION) {
     throw new Error(
       'switchRole is development-server only. Roles come from the profiles table via RLS.',
     );

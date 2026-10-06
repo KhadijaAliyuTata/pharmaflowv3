@@ -254,34 +254,137 @@ section('the source matches this decision table');
 
   const signInStart = src.indexOf('export async function signIn');
   const signInBody = src.slice(signInStart, signInStart + 900);
-  // The gate is `DEMO_ALLOWED`, not `DEMO_MODE`. Naming matters here: `DEMO_MODE` is
-  // derived through a function, so a minifier cannot fold it and the demo branch
-  // survives into the bundle with its credentials intact. `DEMO_ALLOWED` compares a
-  // build-time substitution directly, which folds to `false` and lets the branch be
-  // dropped. An earlier version of this file asserted on `DEMO_MODE` and passed
-  // while the seeded addresses were still in dist/.
+  // The gate is `DEMO_SESSION`, not `DEMO_ALLOWED` and not `DEMO_MODE`. Naming matters
+  // here. `DEMO_MODE` is derived through a function, so a minifier cannot fold it and the
+  // demo branch survives into the bundle with its credentials intact; the fix for that
+  // was `DEMO_ALLOWED`, which compares a build-time substitution directly and so folds
+  // to `false`. But `DEMO_ALLOWED` alone is `IS_DEV_BUILD`, true on ANY development
+  // server, and a previous version of this file asserted on it and passed while the app
+  // booted authenticated as the seeded owner on a dev server with a real Supabase
+  // project configured. Foldable in a production build is necessary but NOT sufficient:
+  // the gate must also mean "demo mode is actually on". Hence `DEMO_SESSION`.
+  //
+  // Both properties are asserted below: the identifier is `DEMO_SESSION`, that constant
+  // is defined as `DEMO_ALLOWED && DEMO_MODE`, and no gate anywhere uses the bare build
+  // flag. Foldability itself is proven empirically by the dist/ section of this file,
+  // which inspects the shipped artefact rather than the source text.
   const gateSite = (fn: string, window = 1600) => {
     const at = src.indexOf(fn);
     return at >= 0 ? src.slice(at, at + window) : '';
   };
   check(
-    'the any-password demo sign-in is gated on the foldable constant, not on DEMO_MODE',
-    gateSite('export async function signIn').includes('if (DEMO_ALLOWED)'),
-    'if it were DEMO_MODE, the branch and its credentials would ship',
+    'the demo gate is DEMO_SESSION, which means demo mode is actually on, not merely that this is a dev server',
+    /const DEMO_SESSION = DEMO_ALLOWED && DEMO_MODE/.test(src),
+    'DEMO_ALLOWED alone is true on any dev server, which let a configured deployment boot as the seeded owner',
   );
   check(
-    'startSession cannot auto-authenticate outside a development build',
-    gateSite('export function startSession').includes('if (DEMO_ALLOWED)'),
+    'the any-password demo sign-in is gated on that constant',
+    gateSite('export async function signIn').includes('if (DEMO_SESSION)'),
   );
   check(
-    'switchRole is gated on the same foldable constant',
-    gateSite('export function switchRole').includes('if (!DEMO_ALLOWED) {') &&
+    'startSession cannot auto-authenticate outside demo mode',
+    gateSite('export function startSession').includes('if (DEMO_SESSION)'),
+  );
+  check(
+    'switchRole is gated on the same constant',
+    gateSite('export function switchRole').includes('if (!DEMO_SESSION) {') &&
       src.includes('development-server only'),
   );
   check(
-    'the initial session cannot start authenticated in a production build',
-    /let current: Session = DEMO_ALLOWED/.test(src),
-    'a DEMO_MODE initialiser would keep DEMO_USERS referenced at module scope',
+    'the initial session cannot start authenticated outside demo mode',
+    /let current: Session = DEMO_SESSION/.test(src),
+    'a DEMO_ALLOWED initialiser booted the seeded owner on a configured dev server',
+  );
+  // Matched against code with comments stripped. The prose around `DEMO_ALLOWED`
+  // quotes the old `if (DEMO_ALLOWED)` form, and matching a comment proves nothing —
+  // this suite has already been burned once by assertions that read source text
+  // instead of behaviour, so it only ever sees what the compiler would.
+  const srcCode = src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^[ \t]*\/\/.*$/gm, ' ');
+  check(
+    'no demo code path is gated on the bare build flag',
+    !/if \(!?DEMO_ALLOWED\)/.test(srcCode) &&
+      !/= DEMO_ALLOWED\s*\?/.test(srcCode) &&
+      !/if \(!?DEMO_ALLOWED\)\s*$/.test(srcCode),
+    'DEMO_ALLOWED may only appear inside the DEMO_SESSION definition',
+  );
+  check(
+    'the bare build flag survives only in the two constants that derive from it',
+    (srcCode.match(/\bDEMO_ALLOWED\b/g) ?? []).length === 3,
+    'expected exactly three: the definition, DEMO_SESSION, and isDemoMode()',
+  );
+
+  // Demo-only SURFACES, not just demo-only behaviour.
+  //
+  // Gating the demo code paths is not sufficient on its own: a control that renders
+  // unconditionally advertises a capability the deployment does not have. The sidebar
+  // badge told live Supabase users their deployment was a "Demo build", the login
+  // screen promised "Any password works" against an auth endpoint that rejects it, and
+  // the sidebar offered "Act as Owner" — a self-service role switch that `switchRole`
+  // refuses to perform. None of those was an exploitable hole, all of them were
+  // misleading, and the last read as a privilege-escalation path.
+  //
+  // What matters is the CONDITION each surface renders under: it must be `isDemoMode()`,
+  // which is `DEMO_ALLOWED && DEMO_MODE`. A bare `DEMO_ALLOWED` would satisfy a naive
+  // "is it gated?" check while still rendering on any dev server, which is the exact
+  // substitution that caused the fail-open fixed above.
+  const ROOT = 'C:/Users/LENOVO/OneDrive/Documents/Default Project/pharmaflowv3/';
+  const sidebarSrc = (await Bun.file(ROOT + 'src/components/app-sidebar.tsx').text()).replace(
+    /\/\*[\s\S]*?\*\//g,
+    ' ',
+  ).replace(/^[ \t]*\/\/.*$/gm, ' ');
+  const loginSrc = (await Bun.file(ROOT + 'src/routes/login.tsx').text())
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/^[ \t]*\/\/.*$/gm, ' ');
+
+  // Every JSX site that mentions a demo-only surface must sit inside an `isDemoMode()`
+  // guard. Matching the surrounding window rather than the bare text, so a guard
+  // anywhere in the file cannot accidentally vouch for an unguarded site elsewhere.
+  const guardedBy = (source: string, marker: string, window = 400) => {
+    const at = source.indexOf(marker);
+    if (at < 0) return false;
+    return /isDemoMode\(\)/.test(source.slice(Math.max(0, at - window), at));
+  };
+  check(
+    'the sidebar "Demo build" badge renders only in demo mode',
+    guardedBy(sidebarSrc, 'Demo build'),
+    'the badge must sit inside an isDemoMode() guard',
+  );
+  check(
+    'the sidebar role switcher renders only in demo mode',
+    guardedBy(sidebarSrc, '<DropdownMenuLabel>Act as</DropdownMenuLabel>'),
+    '"Act as" is a self-service role change and must not appear on live Supabase',
+  );
+  check(
+    'the login screen seeds no credentials unless demo mode is on',
+    guardedBy(loginSrc, '<DemoAccounts'),
+    'DemoAccounts fills the form with a seeded email and password "demo"',
+  );
+  // "Any password works" is not inline at the call site — it is inside the body of the
+  // `DemoAccounts` component, some distance below it. Asserting a guard near the string
+  // would be wrong twice over: it cannot reach, and it would pass for the wrong reason.
+  // The property that actually governs rendering is that the string exists ONLY inside
+  // `DemoAccounts`, and that the component has exactly one mount point, which is guarded.
+  const demoAccountsBody = loginSrc.slice(loginSrc.indexOf('function DemoAccounts'));
+  check(
+    'the "any password works" hint exists only inside DemoAccounts',
+    demoAccountsBody.includes('Any password works') &&
+      loginSrc.split('Any password works').length === 2,
+    'one occurrence, and it is inside the component, so the call-site guard covers it',
+  );
+  check(
+    'and DemoAccounts is mounted in exactly one place, which is guarded',
+    loginSrc.split('<DemoAccounts').length === 2 && guardedBy(loginSrc, '<DemoAccounts'),
+    'a second mount point would be an unguarded route into the same text',
+  );
+  check(
+    'no demo-only surface is gated on the bare build flag',
+    !/isDemoMode\s*=|DEMO_ALLOWED/.test(sidebarSrc) && !/isDemoMode\s*=|DEMO_ALLOWED/.test(loginSrc),
+    'neither component may reach for DEMO_ALLOWED; they call isDemoMode()',
+  );
+  check(
+    'isDemoMode() is itself the conjunction, not a bare mode comparison',
+    /return DEMO_ALLOWED && DEMO_MODE/.test(src),
+    'isDemoMode() must keep requiring a development server AND demo mode',
   );
 
   // The seeded accounts must live outside the production graph. They are still in
