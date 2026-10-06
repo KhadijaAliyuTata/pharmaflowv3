@@ -140,10 +140,10 @@ function NotConfigured({ problem }: { problem: string }) {
           </div>
 
           <p className="text-xs text-muted-foreground">
-            To run against seeded demo data instead, set{' '}
-            <code className="font-mono">PUBLIC_DEMO_MODE=true</code> and restart. Demo mode is
-            opt-in precisely so that a missing variable cannot silently produce a
-            working-looking sign-in.
+            Seeded demo data is available on a development server via{' '}
+            <code className="font-mono">PUBLIC_DEMO_MODE=true</code>. It is not available in a
+            production build at all: demo mode is decided by the build, so no environment variable
+            can turn it on here.
           </p>
         </div>
       </main>
