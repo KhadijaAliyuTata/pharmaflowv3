@@ -143,6 +143,16 @@ export async function applyMigrationTo(db, file) {
  * and `verify-audit-integrity.mjs`, which gives each case a fresh database.
  */
 export async function asRole(db, role, fn) {
+  // Capture BOTH pieces of session state this helper changes. The role is obvious;
+  // the actor is not, and forgetting it is what made a server-role fixture insert run
+  // as the assistant — see the note on `asActor` and the suite that proves it.
+  const previous = await db.query(
+    `select nullif(current_setting('request.jwt.claim.sub', true), '') as sub`,
+  );
+  // `|| null`, not `?? null` — see `asActor`. An unset setting is an empty string, and
+  // handing that to a uuid parameter is a type error rather than a restore.
+  const priorActor = previous.rows[0]?.sub || null;
+
   await db.exec(`set role ${role}`);
   try {
     return { ok: true, value: await fn() };
@@ -162,11 +172,66 @@ export async function asRole(db, role, fn) {
     } catch {
       /* already reset */
     }
+    // Restore the actor. Without this the next bare statement in the suite runs with
+    // `auth.uid()` still pointing at whoever `as()` last impersonated, so a fixture
+    // write that the database correctly refuses for that user looks like a product
+    // defect. A NULL priorActor restores the trusted server context.
+    try {
+      await db.query(`select set_actor($1)`, [priorActor]);
+    } catch {
+      /* nothing to restore */
+    }
   }
 }
 
 export const asAuthenticated = (db, fn) => asRole(db, 'authenticated', fn);
 export const asAnon = (db, fn) => asRole(db, 'anon', fn);
+
+/**
+ * Run `fn` with `request.jwt.claim.sub` set to `actorId`, then RESTORE the previous
+ * value whatever happens.
+ *
+ * This exists because the actor setting is session-level, so it outlives the call that
+ * set it. `asRole()` restores the ROLE and nothing else, so after any
+ * `as(db, ASSISTANT, ...)` call the next plain `query()` still ran with `auth.uid()` =
+ * the assistant, even though the role had reverted to the database owner. A
+ * server-role fixture insert that sets a purchase cost then ran as the assistant and
+ * was refused by the very guard the test was about to exercise.
+ *
+ * That produced false failures before it was found: a cost insert refused with "Only an
+ * owner can set a purchase cost" in a context where no owner was involved, and a suite
+ * that wrote its fixtures under somebody else's identity.
+ *
+ * A NULL `actorId` is a deliberate "trusted server context": `auth.uid()` becomes NULL,
+ * which is what a migration or a service_role connection looks like and what the
+ * privilege-guard triggers treat as trusted.
+ */
+export async function asActor(db, actorId, fn) {
+  const previous = await db.query(
+    `select nullif(current_setting('request.jwt.claim.sub', true), '') as sub`,
+  );
+  // `|| null`, not `?? null`: `current_setting(..., true)` yields an EMPTY STRING when
+  // the setting is absent, and passing that to a uuid parameter is a type error, so the
+  // restore threw and the actor was left as the assistant.
+  const before = previous.rows[0]?.sub || null;
+  try {
+    await db.query(`select set_actor($1)`, [actorId]);
+    return await fn();
+  } finally {
+    await db.query(`select set_actor($1)`, [before]);
+  }
+}
+
+/**
+ * The actor a bare statement would currently run as, or null for the server context.
+ * Exists so a suite can prove the restoration above rather than assume it.
+ */
+export async function currentActor(db) {
+  const r = await db.query(
+    `select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid as uid`,
+  );
+  return r.rows[0]?.uid ?? null;
+}
 
 export const query = async (db, sql, params) => (await db.query(sql, params)).rows;
 

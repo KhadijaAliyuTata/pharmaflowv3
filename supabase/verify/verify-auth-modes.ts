@@ -29,6 +29,9 @@
  * the gate holds in the artefact that actually ships, rather than in the source.
  */
 
+import { readdirSync } from 'node:fs';
+import { join } from 'node:path';
+
 let pass = 0;
 let fail = 0;
 
@@ -336,13 +339,8 @@ section('the PRODUCTION BUILD ARTEFACT carries no demo AUTHENTICATION path');
   // does not silently skip the most important section in the file.
   const ROOT = 'C:/Users/LENOVO/OneDrive/Documents/Default Project/pharmaflowv3';
   const DIST = `${ROOT}/dist`;
-  // `await` on the scan: Array.fromAsync returns a promise, and the previous
-  // version assigned the promise itself, so `artefacts.length` was `undefined`
-  // rather than a count — which took the "dist/ not found" branch even when dist/
-  // existed, and skipped the whole section without saying the scan had failed.
-  const artefacts: string[] = await Array.fromAsync(
-    new Bun.Glob('**/*.{js,mjs,cjs}').scan({ cwd: DIST, absolute: false }),
-  ).catch(() => [] as string[]);
+  const artefacts = walkJs(DIST).map((p) => relative(DIST, p));
+  console.log(`      walk found ${artefacts.length} js file(s) under dist/`);
 
   if (artefacts.length === 0) {
     console.log('SKIP  dist/ not found — run `bun run build` first');
@@ -353,7 +351,22 @@ section('the PRODUCTION BUILD ARTEFACT carries no demo AUTHENTICATION path');
       const f = Bun.file(`${DIST}/${rel}`);
       if (await f.exists()) bundles.push({ file: rel, text: await f.text() });
     }
-    console.log(`      scanned ${bundles.length} bundle(s) under dist/`);
+    console.log(`      scanned ${bundles.length} of ${artefacts.length} discovered bundle(s) under dist/`);
+    check(
+      'the walk reached every file it discovered (no path-joining failure)',
+      bundles.length === artefacts.length,
+      bundles.length === artefacts.length
+        ? `${bundles.length} read`
+        : `${artefacts.length - bundles.length} unreadable — the scan would have been partial`,
+    );
+    // A partial scan that reports success is worse than no scan, because it is believed.
+    const serverCount = bundles.filter((b) => /(^|\/)server\//.test(b.file)).length;
+    const clientCount = bundles.filter((b) => /(^|\/)client\//.test(b.file)).length;
+    check(
+      'both dist/client and dist/server were traversed',
+      serverCount > 0 && clientCount > 0,
+      `client=${clientCount}, server=${serverCount}`,
+    );
 
     const where = (needle: string) =>
       bundles.filter((b) => b.text.includes(needle)).map((b) => b.file);
@@ -460,6 +473,50 @@ section('the PRODUCTION BUILD ARTEFACT carries no demo AUTHENTICATION path');
     );
     console.log('      nothing in the session module reads them, as asserted above.');
   }
+}
+
+/**
+ * Every JS artefact under `dist/`, found by a recursive directory walk.
+ *
+ * NOT Bun.Glob, which is what this file used first. On one build the glob returned 261
+ * files including the SSR chunk; on the next identical build it returned 125 and
+ * silently could not traverse `dist/server` at all — so the check that exists to
+ * inspect the Cloudflare SSR bundle skipped it, while still reporting a clean result.
+ *
+ * That is the worst possible failure for a security assertion: a partial scan that
+ * looks like a pass. A recursive `readdirSync` walk finds 261 every time, and the
+ * "both outputs were inspected" assertion below then fails loudly instead of quietly.
+ */
+function walkJs(dir: string, out: string[] = []): string[] {
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch (e) {
+    // Never swallow this silently. A broken scan and a genuinely absent dist/ must not
+    // look identical, or the section reports counts for a scan that read nothing.
+    console.log('      scan error in ' + dir + ': ' + String(e.message).split('\n')[0].slice(0, 70));
+    return out;
+  }
+  for (const e of entries) {
+    const p = join(dir, e.name);
+    if (e.isDirectory()) walkJs(p, out);
+    else if (/\.(js|mjs|cjs)$/.test(e.name)) out.push(p);
+  }
+  return out;
+}
+
+/**
+ * Absolute path -> path relative to `root`.
+ *
+ * `walkJs` returns absolute paths because that is what `join` produces, but callers
+ * re-join with a forward slash against the dist root. Handing them an absolute path
+ * made `Bun.file(`${DIST}/${abs}`)` point at `dist/C:/Users/...`, so every file
+ * failed the existence check and the section reported "scanned 0 bundles" while the
+ * assertions downstream passed against an empty set. A partial scan that reports
+ * success is worse than no scan, because it is believed.
+ */
+function relative(root: string, full: string): string {
+  return full.slice(root.length + 1).replace(/\\/g, '/');
 }
 
 console.log(`\n=== ${pass} passed, ${fail} failed ===`);
