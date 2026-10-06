@@ -26,23 +26,105 @@ import { setPharmacyCurrentUser } from '~/store/pharmacy';
 const CACHE_KEY = 'pharmaflow:profile:v1';
 
 /**
- * Demo mode.
+ * How this deployment is allowed to authenticate.
  *
- * A deployment with no Supabase credentials would otherwise land on a
- * "not configured" screen, which tells a client nothing. With this on, the app
- * runs against the seeded demo accounts so the product is visible and
- * clickable; the login screen labels it clearly so nobody mistakes it for real
- * security.
+ * Three outcomes, and the distinction between the last two is the whole point of
+ * this rewrite.
  *
- * Set `PUBLIC_DEMO_MODE=false` the moment real credentials exist. It is a
- * presentation fallback, never an auth mode.
+ *   'live'  Supabase is configured. Real authentication, no demo path at all.
+ *   'demo'  Supabase is absent AND demo mode was requested EXPLICITLY. Seeded
+ *           accounts, no real data, banner on screen.
+ *   'broken' Supabase is absent (or half-configured) and demo mode was NOT
+ *           requested. Authentication is impossible and the app must say so.
+ *
+ * ## Why demo mode is now opt-in rather than opt-out
+ *
+ * This used to be:
+ *
+ *     !isSupabaseConfigured() && import.meta.env.PUBLIC_DEMO_MODE !== 'false'
+ *
+ * which fails OPEN, twice over:
+ *
+ *   1. Only the exact literal string "false" turned it off. Unset, "0", "no",
+ *      "off" and "true" all enabled a mode that signs the visitor in as an OWNER.
+ *   2. `isSupabaseConfigured()` requires BOTH the URL and the anon key to be
+ *      non-empty, so a deployment that supplied one and not the other — an
+ *      ordinary CI or secret-configuration mistake — landed in demo mode rather
+ *      than failing loudly.
+ *
+ * A production deploy missing one secret therefore served a fully interactive
+ * owner console with seed data, and looked healthy while doing it. Worse, if the
+ * missing secret was later supplied while the flag stayed stale, writes would go
+ * to localStorage while reads showed seed data: silent data loss.
+ *
+ * The failure direction is now inverted: an absent flag means NO demo, so the
+ * worst case is a clear "not configured" screen instead of a fake owner session.
+ * A half-configured deployment is also called out specifically by
+ * `configProblem`, because "your anon key is empty" is an actionable message and
+ * "not configured" is not.
  */
-const DEMO_MODE =
-  !isSupabaseConfigured() &&
-  import.meta.env.PUBLIC_DEMO_MODE !== 'false';
+type DeploymentMode = 'live' | 'demo' | 'broken';
+
+function resolveDeploymentMode(): DeploymentMode {
+  const url = import.meta.env.PUBLIC_SUPABASE_URL;
+  const anonKey = import.meta.env.PUBLIC_SUPABASE_ANON_KEY;
+
+  const urlPresent = typeof url === 'string' && url.trim().length > 0;
+  const keyPresent = typeof anonKey === 'string' && anonKey.trim().length > 0;
+
+  // Configured means BOTH halves. One without the other is a broken deployment,
+  // not an absent one, and it is the case that used to slip into demo mode.
+  if (urlPresent && keyPresent) return 'live';
+
+  // Opt-in only. `true` is the single accepted affirmative value, so a typo
+  // disables demo rather than enabling a fake owner session.
+  const requested = String(import.meta.env.PUBLIC_DEMO_MODE ?? '').trim().toLowerCase();
+  if (requested === 'true') return 'demo';
+
+  return 'broken';
+}
+
+const DEPLOYMENT_MODE = resolveDeploymentMode();
+
+const DEMO_MODE = DEPLOYMENT_MODE === 'demo';
+
+/**
+ * What is wrong with the configuration, or null when it is fine.
+ *
+ * Reported by the login screen instead of being swallowed, because a deployment
+ * that cannot authenticate should say which variable is missing rather than
+ * rendering an app nobody can sign into.
+ */
+export function configProblem(): string | null {
+  if (DEPLOYMENT_MODE !== 'broken') return null;
+
+  const url = import.meta.env.PUBLIC_SUPABASE_URL;
+  const anonKey = import.meta.env.PUBLIC_SUPABASE_ANON_KEY;
+  const urlPresent = typeof url === 'string' && url.trim().length > 0;
+  const keyPresent = typeof anonKey === 'string' && anonKey.trim().length > 0;
+
+  if (urlPresent && !keyPresent) {
+    return 'PUBLIC_SUPABASE_ANON_KEY is missing. The project URL is set, so this looks like a half-finished configuration rather than a demo build.';
+  }
+  if (!urlPresent && keyPresent) {
+    return 'PUBLIC_SUPABASE_URL is missing. The anon key is set, so this looks like a half-finished configuration rather than a demo build.';
+  }
+  return 'Supabase is not configured. Set PUBLIC_SUPABASE_URL and PUBLIC_SUPABASE_ANON_KEY, or set PUBLIC_DEMO_MODE=true to run against seeded demo data.';
+}
 
 export function isDemoMode(): boolean {
   return DEMO_MODE;
+}
+
+/**
+ * True when authentication is impossible in this deployment.
+ *
+ * Distinct from "not signed in": this is a deployment fault, not a user state,
+ * and the two must not be conflated or the UI will invite someone to sign in to an
+ * app that has no backend.
+ */
+export function isAuthUnavailable(): boolean {
+  return DEPLOYMENT_MODE === 'broken';
 }
 
 const DEMO_USERS: User[] = [
@@ -195,10 +277,26 @@ export function startSession(): void {
 
   // Paint from cache immediately if we have one, so an offline reload does not
   // flash the login screen at an attendant who is already signed in.
+  //
+  // The cached ROLE is deliberately not trusted. `state.currentUser.role` is what
+  // gates every owner-only screen, and this cache lives in localStorage, which the
+  // user can edit. A tampered cache would therefore be able to present owner-only
+  // screens to an assistant.
+  //
+  // That is not a data breach — RLS refuses the reads and the writes regardless,
+  // because authorization is decided by the database — but it would show an
+  // attendant margins, stock valuation and the audit log they are not entitled to
+  // see, which is its own kind of wrong. So the cached profile is used for
+  // IDENTITY only (name, email, phone, so the header is not blank) and the role
+  // is downgraded to the least privileged one until the server confirms it.
+  //
+  // `offline: true` is what tells the UI the role is provisional, so an owner-only
+  // screen can explain itself rather than quietly rendering an empty list.
   const cached = readCache();
   if (cached) {
-    emit({ user: cached.user, status: 'authenticated', offline: true });
-    setPharmacyCurrentUser(cached.user);
+    const provisional: User = { ...cached.user, role: 'assistant', canApprovePricing: false };
+    emit({ user: provisional, status: 'authenticated', offline: true });
+    setPharmacyCurrentUser(provisional);
   }
 
   void supabase.auth.getSession().then(({ data }) => {
@@ -241,9 +339,13 @@ async function adoptSession(userId: string, email: string) {
     setPharmacyCurrentUser(user);
     emit({ user, status: 'authenticated', offline: false });
   } catch {
-    // Profile fetch failed — likely offline. Keep the cached profile visible.
+    // Profile fetch failed — likely offline. Keep the cached identity visible, but
+    // never its role: an unverified role must not decide what this person may see.
     const cached = readCache();
-    if (cached) emit({ user: cached.user, status: 'authenticated', offline: true });
+    if (cached) {
+      const provisional: User = { ...cached.user, role: 'assistant', canApprovePricing: false };
+      emit({ user: provisional, status: 'authenticated', offline: true });
+    }
   }
 }
 
@@ -304,6 +406,11 @@ export async function signIn(
     const user = DEMO_USERS.find((u) => u.email.toLowerCase() === needle);
     // One message for both cases, so the form cannot be used to discover which
     // addresses exist.
+    //
+    // Note this accepts ANY non-empty password, which is why demo mode is now
+    // opt-in and impossible to reach on a configured deployment. It is a
+    // convenience for a seeded build with no real data behind it, and it must
+    // never be reachable when a real pharmacy's Supabase project is attached.
     if (!user || password.trim().length === 0) {
       return { ok: false, error: 'Email or password is incorrect' };
     }

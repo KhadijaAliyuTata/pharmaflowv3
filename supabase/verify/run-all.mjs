@@ -15,7 +15,7 @@ import { spawnSync } from 'node:child_process';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SUITES = readdirSync(HERE)
-  .filter((f) => f.startsWith('verify-') && f.endsWith('.mjs'))
+  .filter((f) => f.startsWith('verify-') && (f.endsWith('.mjs') || f.endsWith('.ts')))
   .sort();
 
 const bun = process.execPath;

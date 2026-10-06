@@ -4,7 +4,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { toast } from 'sonner';
-import { KeyRound, Lock, ShieldCheck } from 'lucide-react';
+import { KeyRound, Lock, ShieldCheck, TriangleAlert } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '~/components/ui/alert';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
@@ -34,7 +34,7 @@ import { Skeleton } from '~/components/ui/skeleton';
 import { Toaster } from '~/components/ui/sonner';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '~/components/ui/tabs';
 import { BRAND } from '~/lib/nav';
-import { DEMO_ACCOUNTS, signIn, useSession } from '~/lib/session';
+import { DEMO_ACCOUNTS, configProblem, signIn, useSession } from '~/lib/session';
 
 /**
  * Sign in. One route, two tabs, two form components.
@@ -66,6 +66,13 @@ function Login() {
   // this one, so a signed-in user does not normally see either.
   if (status === 'authenticated') return <Navigate to="/" />;
   if (status === 'loading' && mounted) return <LoginSkeleton />;
+
+  // A deployment that cannot authenticate at all gets a diagnosis instead of a
+  // sign-in form. Offering a form here is what made the old fail-open behaviour
+  // invisible: an operator saw a normal login screen and had no reason to suspect
+  // the backend was missing.
+  const problem = configProblem();
+  if (problem) return <NotConfigured problem={problem} />;
 
   return (
     <div className="grid min-h-dvh lg:grid-cols-2">
@@ -104,6 +111,45 @@ function Login() {
 }
 
 /* ------------------------------------------------------------- staff form */
+
+/**
+ * Shown when this deployment cannot authenticate at all.
+ *
+ * Deliberately not a sign-in form. If authentication is impossible, a form is a
+ * dead end that looks like a password problem, and the operator has no signal
+ * that the real fault is a missing build variable. Naming the variable is the
+ * whole value of this screen.
+ */
+function NotConfigured({ problem }: { problem: string }) {
+  return (
+    <div className="grid min-h-dvh lg:grid-cols-2">
+      <BrandPanel />
+
+      <main className="flex items-center justify-center p-6">
+        <div className="w-full max-w-sm space-y-4">
+          <div className="space-y-1">
+            <h1 className="text-xl font-semibold tracking-tight">Not configured</h1>
+            <p className="text-sm text-muted-foreground">
+              This build cannot sign anyone in.
+            </p>
+          </div>
+
+          <div className="flex items-start gap-2 rounded-lg border border-warning-border bg-warning-subtle px-3 py-2.5">
+            <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warning" />
+            <p className="text-sm text-warning">{problem}</p>
+          </div>
+
+          <p className="text-xs text-muted-foreground">
+            To run against seeded demo data instead, set{' '}
+            <code className="font-mono">PUBLIC_DEMO_MODE=true</code> and restart. Demo mode is
+            opt-in precisely so that a missing variable cannot silently produce a
+            working-looking sign-in.
+          </p>
+        </div>
+      </main>
+    </div>
+  );
+}
 
 const staffSchema = z.object({
   email: z.email('Enter a valid email'),

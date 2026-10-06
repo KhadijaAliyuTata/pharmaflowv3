@@ -17,15 +17,25 @@ import type { Database } from './db.types';
  *    anywhere in this app, so the anon key is all a browser can ever see, and
  *    RLS plus the column grants are the real security boundary.
  *
- * If these are missing the app does NOT silently fall back to demo mode — it
- * throws, and `isSupabaseConfigured()` lets the UI say so plainly.
+ * If these are missing, `getSupabase()` throws rather than degrading quietly.
+ * Whether that absence means "broken deployment" or "demo build" is decided in
+ * `~/lib/session`, which is the only place that makes that judgement — see
+ * `resolveDeploymentMode` there for why the decision is opt-in.
+ *
+ * This function only answers "are both halves present". It deliberately does NOT
+ * decide whether the app may proceed; a caller that treats `false` as "fall back
+ * to something local" is exactly the bug this separation prevents.
  */
 const url = import.meta.env.PUBLIC_SUPABASE_URL;
 const anonKey = import.meta.env.PUBLIC_SUPABASE_ANON_KEY;
 
 export function isSupabaseConfigured(): boolean {
-  return typeof url === 'string' && url.length > 0 &&
-         typeof anonKey === 'string' && anonKey.length > 0;
+  return (
+    typeof url === 'string' &&
+    url.trim().length > 0 &&
+    typeof anonKey === 'string' &&
+    anonKey.trim().length > 0
+  );
 }
 
 export const SUPABASE_URL = url ?? null;
