@@ -115,18 +115,38 @@ export async function applyMigrationTo(db, file) {
   return db.exec(applyPgCryptoSubstitution(sql));
 }
 
-/** Rule 2: the role is always restored, and errors are returned rather than thrown. */
+/**
+ * Rule 2: run as `role`, always restore it, always recover the transaction.
+ *
+ * Catching an error is not enough on its own. PostgreSQL aborts the whole
+ * transaction on the first failure, so after a *caught* error every subsequent
+ * statement fails with "current transaction is aborted" until something issues a
+ * ROLLBACK. Without the rollback below, one refused write silently poisons the
+ * rest of the suite — which is how a correctly-refused INSERT came to be
+ * reported as ACCEPTED: the transaction was already dead before it ran.
+ *
+ * The rollback is issued while still in the role, because the connection may
+ * need the role's privileges to perform it in some configurations; it is
+ * harmless either way since ROLLBACK needs no table access.
+ */
 export async function asRole(db, role, fn) {
   await db.exec(`set role ${role}`);
   try {
     return { ok: true, value: await fn() };
   } catch (e) {
-    return { ok: false, err: String(e?.message ?? e).split('\n')[0].slice(0, 200) };
+    const err = String(e?.message ?? e).split('\n')[0].slice(0, 200);
+    // Recover the session before returning, so the caller can keep asserting.
+    try {
+      await db.exec('rollback');
+    } catch {
+      /* already clean */
+    }
+    return { ok: false, err };
   } finally {
     try {
       await db.exec('reset role');
     } catch {
-      /* the transaction is already aborted; the next freshDatabase() clears it */
+      /* already reset */
     }
   }
 }
