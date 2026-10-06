@@ -141,7 +141,7 @@ section('A: an assistant may record their OWN action');
     `select count(*)::int as n from audit_events where description = 'with returning'`,
   );
   check(
-    'and nothing was stored by that attempt — the statement is atomic, so the',
+    'and nothing was stored by that attempt, since the statement is atomic',
     leaked[0].n === 0,
     `${leaked[0].n} rows`,
   );
@@ -251,80 +251,80 @@ section('C and D: an assistant may not UPDATE or DELETE existing history');
     note('tamper cases skipped — no audit row exists to tamper with');
     await db.close();
   } else {
-  const targetId = before[0].id;
+    const targetId = before[0].id;
 
-  // Compare against the value actually inserted. An earlier version of this
-  // assertion expected 'baseline' while the fixture wrote 'baseline entry', so it
-  // reported "ALTERED TO baseline entry" — the row was in fact untouched and the
-  // test was wrong about its own fixture.
-  const BASELINE = 'baseline entry';
+    // Compare against the value actually inserted. An earlier version of this
+    // assertion expected 'baseline' while the fixture wrote 'baseline entry', so it
+    // reported "ALTERED TO baseline entry" — the row was in fact untouched and the
+    // test was wrong about its own fixture.
+    const BASELINE = 'baseline entry';
 
-  const update = await as(db, ids.ASSISTANT_A, () =>
-    query(db, `update audit_events set description = 'tampered' where id = $1`, [targetId]),
-  );
-  const afterUpdate = await query(db, `select description from audit_events where id = $1`, [
-    targetId,
-  ]);
-  check(
-    'an assistant cannot UPDATE an audit entry',
-    afterUpdate.length === 1 && afterUpdate[0].description === BASELINE,
-    afterUpdate[0]?.description === BASELINE
-      ? `still "${afterUpdate[0].description}" (update reported ${update.ok ? 'success' : 'refused'} — RLS matched 0 rows)`
-      : `ALTERED TO "${afterUpdate[0]?.description}"`,
-  );
+    const update = await as(db, ids.ASSISTANT_A, () =>
+      query(db, `update audit_events set description = 'tampered' where id = $1`, [targetId]),
+    );
+    const afterUpdate = await query(db, `select description from audit_events where id = $1`, [
+      targetId,
+    ]);
+    check(
+      'an assistant cannot UPDATE an audit entry',
+      afterUpdate.length === 1 && afterUpdate[0].description === BASELINE,
+      afterUpdate[0]?.description === BASELINE
+        ? `still "${afterUpdate[0].description}" (update reported ${update.ok ? 'success' : 'refused'} — RLS matched 0 rows)`
+        : `ALTERED TO "${afterUpdate[0]?.description}"`,
+    );
 
-  const del = await as(db, ids.ASSISTANT_A, () =>
-    query(db, `delete from audit_events where id = $1`, [targetId]),
-  );
-  const afterDelete = await query(db, `select count(*)::int as n from audit_events where id = $1`, [
-    targetId,
-  ]);
-  check(
-    'an assistant cannot DELETE an audit entry',
-    afterDelete[0].n === 1,
-    afterDelete[0].n === 1
-      ? `row survived (delete reported ${del.ok ? 'success' : 'refused'} — RLS matched 0 rows)`
-      : 'ROW WAS DELETED',
-  );
+    const del = await as(db, ids.ASSISTANT_A, () =>
+      query(db, `delete from audit_events where id = $1`, [targetId]),
+    );
+    const afterDelete = await query(db, `select count(*)::int as n from audit_events where id = $1`, [
+      targetId,
+    ]);
+    check(
+      'an assistant cannot DELETE an audit entry',
+      afterDelete[0].n === 1,
+      afterDelete[0].n === 1
+        ? `row survived (delete reported ${del.ok ? 'success' : 'refused'} — RLS matched 0 rows)`
+        : 'ROW WAS DELETED',
+    );
 
-  // Nothing may update or delete, so confirm there is no policy to be permissive
-  // about in the first place. Table-level grants ARE present, which is why the
-  // assertion above checks stored state rather than an error.
-  const shape = await query(
-    db,
-    `select
-       (select count(*)::int from pg_policies where tablename = 'audit_events' and cmd = 'UPDATE') as update_policies,
-       (select count(*)::int from pg_policies where tablename = 'audit_events' and cmd = 'DELETE') as delete_policies,
-       has_table_privilege('authenticated', 'audit_events', 'UPDATE') as update_granted,
-       has_table_privilege('authenticated', 'audit_events', 'DELETE') as delete_granted`,
-  );
-  check(
-    'UPDATE is blocked by the ABSENCE of any policy, not by a deny rule',
-    shape[0].update_policies === 0 && shape[0].delete_policies === 0,
-    `${shape[0].update_policies} UPDATE policies, ${shape[0].delete_policies} DELETE policies ` +
-      `(table grants present: upd=${shape[0].update_granted} del=${shape[0].delete_granted})`,
-  );
+    // Nothing may update or delete, so confirm there is no policy to be permissive
+    // about in the first place. Table-level grants ARE present, which is why the
+    // assertion above checks stored state rather than an error.
+    const shape = await query(
+      db,
+      `select
+         (select count(*)::int from pg_policies where tablename = 'audit_events' and cmd = 'UPDATE') as update_policies,
+         (select count(*)::int from pg_policies where tablename = 'audit_events' and cmd = 'DELETE') as delete_policies,
+         has_table_privilege('authenticated', 'audit_events', 'UPDATE') as update_granted,
+         has_table_privilege('authenticated', 'audit_events', 'DELETE') as delete_granted`,
+    );
+    check(
+      'UPDATE is blocked by the ABSENCE of any policy, not by a deny rule',
+      shape[0].update_policies === 0 && shape[0].delete_policies === 0,
+      `${shape[0].update_policies} UPDATE policies, ${shape[0].delete_policies} DELETE policies ` +
+        `(table grants present: upd=${shape[0].update_granted} del=${shape[0].delete_granted})`,
+    );
 
-  // Owners may not rewrite history either. An append-only log that an owner can
-  // edit is not append-only.
-  const ownerUpdate = await as(db, ids.OWNER_A, () =>
-    query(db, `update audit_events set description = 'owner tampered' where id = $1`, [targetId]),
-  );
-  const ownerDelete = await as(db, ids.OWNER_A, () =>
-    query(db, `delete from audit_events where id = $1`, [targetId]),
-  );
-  const ownerAfter = await query(db, `select count(*)::int as n from audit_events where id = $1`, [
-    targetId,
-  ]);
-  check(
-    'nor can an OWNER update or delete it — the log is append-only for everyone',
-    ownerAfter[0].n === 1 && ownerUpdate.ok === ownerDelete.ok,
-    `${ownerAfter[0].n} row(s) remain; update=${ownerUpdate.ok ? 'reported success' : 'refused'}, ` +
-      `delete=${ownerDelete.ok ? 'reported success' : 'refused'}`,
-  );
+    // Owners may not rewrite history either. An append-only log that an owner can
+    // edit is not append-only.
+    const ownerUpdate = await as(db, ids.OWNER_A, () =>
+      query(db, `update audit_events set description = 'owner tampered' where id = $1`, [targetId]),
+    );
+    const ownerDelete = await as(db, ids.OWNER_A, () =>
+      query(db, `delete from audit_events where id = $1`, [targetId]),
+    );
+    const ownerAfter = await query(db, `select count(*)::int as n from audit_events where id = $1`, [
+      targetId,
+    ]);
+    check(
+      'nor can an OWNER update or delete it — the log is append-only for everyone',
+      ownerAfter[0].n === 1 && ownerUpdate.ok === ownerDelete.ok,
+      `${ownerAfter[0].n} row(s) remain; update=${ownerUpdate.ok ? 'reported success' : 'refused'}, ` +
+        `delete=${ownerDelete.ok ? 'reported success' : 'refused'}`,
+    );
 
-  await db.close();
-  }
+    await db.close();
+    }
 }
 
 /* =============================================== E: session not contaminated */
