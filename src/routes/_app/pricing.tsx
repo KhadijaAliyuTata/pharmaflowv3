@@ -34,6 +34,8 @@ import {
   stockStatus,
   unitMargin,
 } from '~/domain/selectors';
+import { useMedicines } from '~/hooks/use-medicines';
+import { useIsOwner } from '~/hooks/use-is-owner';
 import { usePharmacy, usePharmacyActions } from '~/store/pharmacy';
 import type { Result } from '~/domain/operations';
 import type { Medicine, StockReceipt } from '~/domain/types';
@@ -43,11 +45,14 @@ export const Route = createFileRoute('/_app/pricing')({
 });
 
 function Pricing() {
-  const medicines = usePharmacy((state) => state.medicines);
+  // Catalogue from Supabase in live mode; useMedicines has no local
+  // fallback there, so a failed read surfaces as an error, not as seed data.
+  const { medicines } = useMedicines();
   const pending = usePharmacy((state) =>
     state.stockReceipts.filter((receipt) => receipt.status === 'pending_pricing'),
   );
-  const isOwner = usePharmacy((state) => state.currentUser.role === 'owner');
+  // Authoritative: pf_is_owner() reads branch_memberships.role.
+  const isOwner = useIsOwner();
   const { approvePricing, updatePrice } = usePharmacyActions();
 
   const retailValue = portfolioRetail(medicines);

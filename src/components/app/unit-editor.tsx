@@ -11,6 +11,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from '~/components/ui/dialog';
+import {
+  CATALOGUE_WRITE_UNAVAILABLE,
+  catalogueWritesAvailable,
+} from '~/lib/catalogue-writes';
 import { Input } from '~/components/ui/input';
 import { Label } from '~/components/ui/label';
 import { Money } from '~/components/app/primitives';
@@ -60,6 +64,7 @@ function suggestKey(name: string): string {
  */
 export function UnitEditor({ medicine, open, onOpenChange }: UnitEditorProps) {
   const isOwner = usePharmacy((state) => state.currentUser.role === 'owner');
+  const writesAvailable = catalogueWritesAvailable();
   // Only the slices the history check needs, rather than the whole store, so an
   // unrelated keystroke elsewhere does not re-render an open editor.
   const sales = usePharmacy((state) => state.sales);
@@ -184,7 +189,20 @@ export function UnitEditor({ medicine, open, onOpenChange }: UnitEditorProps) {
     setError(null);
   };
 
+  /**
+   * Packaging edits still go to state.medicines in localStorage, while the
+   * catalogue the user is looking at comes from Supabase. In live mode those are
+   * different rows, so the save is refused with a visible reason rather than
+   * reporting a change to a collection nothing is reading. See
+   * ~/lib/catalogue-writes.
+   */
   const save = () => {
+    if (!writesAvailable) {
+      setError(CATALOGUE_WRITE_UNAVAILABLE);
+      return;
+    }
+
+    setError(null);
     setError(null);
 
     // The database requires the base unit at index 0. Display order is by size,

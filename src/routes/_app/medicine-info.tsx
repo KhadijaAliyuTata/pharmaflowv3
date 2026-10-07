@@ -44,6 +44,8 @@ import {
 import { MaybeMoney, Money, PageHeader, SectionTitle, StatusBadge } from '~/components/app/primitives';
 import { daysUntil, formatCount, formatDate } from '~/domain/money';
 import { searchMedicines, sellableQuantity, stockStatus } from '~/domain/selectors';
+import { useMedicines } from '~/hooks/use-medicines';
+import { useIsOwner } from '~/hooks/use-is-owner';
 import { usePharmacy } from '~/store/pharmacy';
 
 export const Route = createFileRoute('/_app/medicine-info')({
@@ -51,9 +53,11 @@ export const Route = createFileRoute('/_app/medicine-info')({
 });
 
 function MedicineInfo() {
-  const medicines = usePharmacy((state) => state.medicines);
-  const role = usePharmacy((state) => state.currentUser.role);
-  const isOwner = role === 'owner';
+  // Catalogue from Supabase in live mode; useMedicines has no local
+  // fallback there, so a failed read surfaces as an error, not as seed data.
+  const { medicines } = useMedicines();
+  // Authoritative: pf_is_owner() reads branch_memberships.role.
+  const isOwner = useIsOwner();
 
   const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);

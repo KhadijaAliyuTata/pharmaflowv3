@@ -38,6 +38,8 @@ import { formatRelative, formatWhen, sum } from '~/domain/money';
 import type { Customer, Medicine } from '~/domain/types';
 import { useCurrentUser, usePharmacy } from '~/store/pharmacy';
 import { useSeedQuery } from '~/lib/use-seed-query';
+import { useMedicines } from '~/hooks/use-medicines';
+import { useIsOwner } from '~/hooks/use-is-owner';
 
 export const Route = createFileRoute('/_app/customers')({
   // Seeded by the header's global search, so a customer result opens the
@@ -93,9 +95,11 @@ function compare(a: Customer, b: Customer, key: SortKey): number {
 function CustomersScreen() {
   const customers = usePharmacy((state) => state.customers);
   const sales = usePharmacy((state) => state.sales);
-  const medicines = usePharmacy((state) => state.medicines);
-  const { role } = useCurrentUser();
-  const isOwner = role === 'owner';
+  // Catalogue from Supabase in live mode; useMedicines has no local
+  // fallback there, so a failed read surfaces as an error, not as seed data.
+  const { medicines } = useMedicines();
+  // Authoritative: pf_is_owner() reads branch_memberships.role.
+  const isOwner = useIsOwner();
 
   const [query, setQuery] = useSeedQuery(Route.useSearch().q);
   const [sort, setSort] = useState<SortKey>('name');

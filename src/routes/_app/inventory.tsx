@@ -12,6 +12,7 @@ import {
   PencilLine,
   Search,
   SlidersHorizontal,
+  TriangleAlert,
 } from 'lucide-react';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
@@ -83,6 +84,12 @@ import { formatStockQuantity } from '~/domain/units';
 import { marginPercent, searchMedicines, sellableQuantity, stockStatus } from '~/domain/selectors';
 import type { Medicine, MedicineBatch, StockStatus } from '~/domain/types';
 import { usePharmacy, usePharmacyActions } from '~/store/pharmacy';
+import { useMedicines } from '~/hooks/use-medicines';
+import { useIsOwner } from '~/hooks/use-is-owner';
+import {
+  CATALOGUE_WRITE_UNAVAILABLE,
+  catalogueWritesAvailable,
+} from '~/lib/catalogue-writes';
 import { useSeedQuery } from '~/lib/use-seed-query';
 
 export const Route = createFileRoute('/_app/inventory')({
@@ -136,10 +143,13 @@ type Pending =
 
 function Inventory() {
   const { q } = Route.useSearch();
-  const medicines = usePharmacy((state) => state.medicines);
+  // Catalogue comes from Supabase in live mode; see useMedicines for why it has no
+  // localStorage fallback there.
+  const { medicines, loading: catalogueLoading, error: catalogueError } = useMedicines();
   const suppliers = usePharmacy((state) => state.suppliers);
-  const role = usePharmacy((state) => state.currentUser.role);
-  const isOwner = role === 'owner';
+  // Authoritative: `pf_is_owner()` resolves branch_memberships.role. Display
+  // gating only — `profiles.role` is a cache and RLS is the boundary.
+  const isOwner = useIsOwner();
 
   const [query, setQuery] = useSeedQuery(q);
   const [status, setStatus] = useState<StatusFilter>('all');
@@ -151,6 +161,12 @@ function Inventory() {
   const [page, setPage] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [pending, setPending] = useState<Pending | null>(null);
+  /**
+   * Why a catalogue action was refused. Non-null means the user clicked something
+   * that is not available yet, and nothing was changed.
+   */
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const writesAvailable = catalogueWritesAvailable();
 
   const { updatePrice, adjustStock, setSafetyLock, setBatchRecall } = usePharmacyActions();
 
@@ -208,7 +224,24 @@ function Inventory() {
     );
   }
 
+  /**
+   * Every mutating catalogue action funnels through here.
+   *
+   * In live mode the list on screen came from Supabase while these actions would
+   * rewrite `state.medicines` in localStorage — two different collections of rows.
+   * So the action is refused with a visible reason instead of appearing to succeed
+   * and then vanishing on the next render. Nothing is written in either case, and
+   * `setPending` is never reached, so no dialog can submit a local mutation.
+   *
+   * Gating the single handler rather than each menu item covers the row menu and the
+   * detail sheet together, and cannot be bypassed by a control added later.
+   */
   function openAction(next: Pending) {
+    if (!writesAvailable) {
+      setActionNotice(CATALOGUE_WRITE_UNAVAILABLE);
+      return;
+    }
+    setActionNotice(null);
     setPending(next);
   }
 
@@ -341,16 +374,52 @@ function Inventory() {
 
       <Card>
         <CardContent>
-          {rows.length === 0 ? (
+          {catalogueError ? (
+            /* A failed read is never disguised as an empty catalogue. The seeded
+               demo products are deliberately not shown instead: they belong to a
+               different pharmacy and would look like real stock. */
             <Empty className="border">
               <EmptyHeader>
                 <EmptyMedia variant="icon">
-                  <Search />
+                  <TriangleAlert />
                 </EmptyMedia>
-                <EmptyTitle>Nothing matches</EmptyTitle>
-                <EmptyDescription>Clear the search or widen the filters.</EmptyDescription>
+                <EmptyTitle>Catalogue unavailable</EmptyTitle>
+                <EmptyDescription>
+                  {catalogueError} Nothing is shown in its place — an empty list here
+                  would look like a pharmacy that has never stocked anything.
+                </EmptyDescription>
               </EmptyHeader>
             </Empty>
+          ) : catalogueLoading ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">
+              Loading the catalogue…
+            </p>
+          ) : rows.length === 0 ? (
+            medicines.length === 0 ? (
+              /* Distinct from "nothing matches": an empty pharmacy is a real state,
+                 and it needs different words from a filter that excluded everything. */
+              <Empty className="border">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <Search />
+                  </EmptyMedia>
+                  <EmptyTitle>No products yet</EmptyTitle>
+                  <EmptyDescription>
+                    Nothing has been added to this pharmacy&rsquo;s catalogue.
+                  </EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            ) : (
+              <Empty className="border">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <Search />
+                  </EmptyMedia>
+                  <EmptyTitle>Nothing matches</EmptyTitle>
+                  <EmptyDescription>Clear the search or widen the filters.</EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            )
           ) : (
             <>
               <Table>
@@ -514,11 +583,22 @@ function Inventory() {
         onAction={openAction}
       />
 
+      {/* A refused catalogue action. Shown instead of a success toast, and it clears
+          on the next attempt, so it never misreports a change that did not happen. */}
+      {actionNotice && (
+        <p
+          role="alert"
+          className="rounded-lg border border-warning-border bg-warning-subtle px-3 py-2 text-sm text-warning"
+        >
+          {actionNotice}
+        </p>
+      )}
+
       {pending && (
         <ActionDialog
           key={actionKey(pending)}
           pending={pending}
-          role={role}
+          isOwner={isOwner}
           onClose={() => setPending(null)}
           updatePrice={updatePrice}
           adjustStock={adjustStock}
@@ -926,7 +1006,13 @@ type OperationResult = { ok: true } | { ok: false; error: string };
 
 interface ActionDialogProps {
   pending: Pending;
-  role: 'owner' | 'assistant';
+  /**
+   * Authoritative ownership, from `pf_is_owner()` — which reads
+   * `branch_memberships.role`. Not `profiles.role`, which is a display cache that a
+   * demotion never repairs. Display gating only; the local actions below still run
+   * their own `canApprovePricing` checks, and the database is the boundary.
+   */
+  isOwner: boolean;
   onClose: () => void;
   updatePrice: (medicineId: string, price: number) => OperationResult;
   adjustStock: (medicineId: string, quantity: number, reason: string) => OperationResult;
@@ -943,7 +1029,7 @@ const OWNER_ONLY: Record<Pending['kind'], boolean> = {
 
 function ActionDialog({
   pending,
-  role,
+  isOwner,
   onClose,
   updatePrice,
   adjustStock,
@@ -958,8 +1044,8 @@ function ActionDialog({
   function submit() {
     setError(null);
 
-    // Enforced against the live role, not only by hiding the control.
-    if (OWNER_ONLY[pending.kind] && role !== 'owner') {
+    // Enforced against the authoritative role, not only by hiding the control.
+    if (OWNER_ONLY[pending.kind] && !isOwner) {
       setError('Only an owner can change prices, locks or recalls');
       return;
     }

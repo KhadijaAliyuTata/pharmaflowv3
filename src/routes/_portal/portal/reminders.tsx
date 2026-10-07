@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { createFileRoute } from '@tanstack/react-router';
 import { Lock, MessageCircle, Smartphone } from 'lucide-react';
 import { Badge } from '~/components/ui/badge';
@@ -11,6 +11,7 @@ import { formatDate, formatRelative } from '~/domain/money';
 import type { Medicine } from '~/domain/types';
 import { refillRows, usePortalCustomer } from '~/lib/portal';
 import { useLocalReminders } from '~/hooks/use-local-reminders';
+import { useMedicines } from '~/hooks/use-medicines';
 import { usePharmacy } from '~/store/pharmacy';
 
 export const Route = createFileRoute('/_portal/portal/reminders')({
@@ -22,8 +23,12 @@ const COVERED: ReadonlySet<string> = new Set(['in_stock', 'low_stock', 'expiring
 function PortalReminders() {
   const customer = usePortalCustomer();
   const branch = usePharmacy((state) => state.branch);
-  const rows = usePharmacy((state) =>
-    customer === null ? [] : refillRows(customer, state.medicines, state.sales),
+  // Catalogue from Supabase, sales still local (Sales is a later migration step).
+  const { medicines } = useMedicines();
+  const sales = usePharmacy((state) => state.sales);
+  const rows = useMemo(
+    () => (customer === null ? [] : refillRows(customer, medicines, sales)),
+    [customer, medicines, sales],
   );
 
   const { reminders, loaded, save } = useLocalReminders();

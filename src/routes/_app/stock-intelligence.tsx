@@ -33,6 +33,8 @@ import { MaybeMoney, Money, PageHeader, SectionTitle, StatTile } from '~/compone
 import { formatCount, sumKnown } from '~/domain/money';
 import { reorderSuggestions, sellableQuantity, stockValue } from '~/domain/selectors';
 import type { ReorderPriority, ReorderSuggestion } from '~/domain/types';
+import { useMedicines } from '~/hooks/use-medicines';
+import { useIsOwner } from '~/hooks/use-is-owner';
 import { usePharmacy } from '~/store/pharmacy';
 
 export const Route = createFileRoute('/_app/stock-intelligence')({
@@ -68,10 +70,12 @@ const PRIORITY_META: Record<
 };
 
 function StockIntelligence() {
-  const medicines = usePharmacy((state) => state.medicines);
+  // Catalogue from Supabase in live mode; useMedicines has no local
+  // fallback there, so a failed read surfaces as an error, not as seed data.
+  const { medicines } = useMedicines();
   const suppliers = usePharmacy((state) => state.suppliers);
-  const role = usePharmacy((state) => state.currentUser.role);
-  const isOwner = role === 'owner';
+  // Authoritative: pf_is_owner() reads branch_memberships.role.
+  const isOwner = useIsOwner();
 
   const [priority, setPriority] = useState<ReorderPriority>('urgent');
 

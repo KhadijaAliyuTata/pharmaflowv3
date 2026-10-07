@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { Link, createFileRoute } from '@tanstack/react-router';
 import { ArrowRight, Lock } from 'lucide-react';
 import { Badge } from '~/components/ui/badge';
@@ -7,6 +8,7 @@ import { PortalSearchBox } from '~/components/portal-search';
 import { Money, StatTile, StatusBadge } from '~/components/app/primitives';
 import { formatRelative } from '~/domain/money';
 import { refillRows, usePortalCustomer } from '~/lib/portal';
+import { useMedicines } from '~/hooks/use-medicines';
 import { usePharmacy } from '~/store/pharmacy';
 
 export const Route = createFileRoute('/_portal/portal/')({
@@ -18,8 +20,12 @@ function PortalHome() {
   const customer = usePortalCustomer();
   const branch = usePharmacy((state) => state.branch);
   const orders = usePharmacy((state) => state.customerOrders);
-  const rows = usePharmacy((state) =>
-    customer === null ? [] : refillRows(customer, state.medicines, state.sales),
+  // Catalogue from Supabase, sales still local (Sales is a later migration step).
+  const { medicines } = useMedicines();
+  const sales = usePharmacy((state) => state.sales);
+  const rows = useMemo(
+    () => (customer === null ? [] : refillRows(customer, medicines, sales)),
+    [customer, medicines, sales],
   );
 
   const myOrders = orders.filter((order) => order.customerId === customer?.id);

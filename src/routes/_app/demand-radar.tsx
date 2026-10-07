@@ -21,6 +21,7 @@ import {
 } from '~/components/ui/table';
 import { PageHeader, SectionTitle, StatTile } from '~/components/app/primitives';
 import { demandRadar, demandRadarSummary } from '~/domain/dashboard';
+import { useMedicines } from '~/hooks/use-medicines';
 import { usePharmacy } from '~/store/pharmacy';
 
 /**
@@ -71,7 +72,9 @@ const WINDOWS = [
 
 function DemandRadarScreen() {
   const medicineRequests = usePharmacy((state) => state.medicineRequests);
-  const medicines = usePharmacy((state) => state.medicines);
+  // Catalogue from Supabase in live mode; useMedicines has no local
+  // fallback there, so a failed read surfaces as an error, not as seed data.
+  const { medicines } = useMedicines();
   const [days, setDays] = useState<number>(30);
 
   const rows = useMemo(

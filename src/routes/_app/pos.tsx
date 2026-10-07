@@ -49,6 +49,7 @@ import {
   stockStatus,
   summariseSales,
 } from '~/domain/selectors';
+import { useMedicines } from '~/hooks/use-medicines';
 import { usePharmacy, usePharmacyActions } from '~/store/pharmacy';
 import type { CartLine, Medicine, PaymentMethod, TradeUnit } from '~/domain/types';
 
@@ -73,7 +74,9 @@ const PAYMENT_METHODS: { value: PaymentMethod; label: string }[] = [
 const NO_ACCOUNT = 'none';
 
 function PointOfSale() {
-  const medicines = usePharmacy((state) => state.medicines);
+  // Catalogue from Supabase in live mode; useMedicines has no local
+  // fallback there, so a failed read surfaces as an error, not as seed data.
+  const { medicines } = useMedicines();
   const creditAccounts = usePharmacy((state) => state.creditAccounts);
   const today = usePharmacy((state) => summariseSales(salesSince(state.sales, 24)));
   const { checkout } = usePharmacyActions();

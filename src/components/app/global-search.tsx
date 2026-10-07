@@ -11,6 +11,7 @@ import {
 import { Input } from '~/components/ui/input';
 import { Kbd } from '~/components/ui/kbd';
 import { CATEGORY_LABEL, globalSearch, type SearchCategory, type SearchResult } from '~/domain/search';
+import { useMedicines } from '~/hooks/use-medicines';
 import { usePharmacy } from '~/store/pharmacy';
 
 /**
@@ -68,7 +69,7 @@ export function GlobalSearch({
   // Only the four collections search actually reads, each as its own selector
   // call. Selecting the whole state would re-render this on every stock tick in
   // the app, which is the exact problem the store's per-slice design avoids.
-  const medicines = usePharmacy((s) => s.medicines);
+  const { medicines } = useMedicines();
   const suppliers = usePharmacy((s) => s.suppliers);
   const users = usePharmacy((s) => s.users);
   const customers = usePharmacy((s) => s.customers);

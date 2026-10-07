@@ -436,10 +436,26 @@ export interface DashboardSnapshot {
   topSellers: { medicine: Medicine; sold: number; revenue: number }[];
 }
 
-export function dashboardSnapshot(state: AppState): DashboardSnapshot {
+/**
+ * Dashboard figures.
+ *
+ * medicines is a parameter, not read from state. Once the catalogue comes from
+ * Supabase the store's state.medicines is the seeded collection again in live
+ * mode, so a snapshot that read it directly would report out-of-stock counts,
+ * expiring totals and top sellers for products this pharmacy does not stock,
+ * beside tiles computed from the real catalogue. Passing the catalogue in keeps
+ * every figure in the snapshot describing the same set of products.
+ *
+ * Omitting it keeps the previous behaviour, which is what the local/demo callers
+ * want.
+ */
+export function dashboardSnapshot(
+  state: AppState,
+  medicines: Medicine[] = state.medicines,
+): DashboardSnapshot {
   const todaySales = salesSince(state.sales, 24);
   const today = summariseSales(todaySales);
-  const statuses = state.medicines.map(stockStatus);
+  const statuses = medicines.map(stockStatus);
 
   const soldByMedicine = new Map<string, { sold: number; revenue: number }>();
   for (const sale of todaySales) {
@@ -454,7 +470,7 @@ export function dashboardSnapshot(state: AppState): DashboardSnapshot {
 
   const topSellers = Array.from(soldByMedicine.entries())
     .map(([medicineId, stats]) => {
-      const medicine = state.medicines.find((m) => m.id === medicineId);
+      const medicine = medicines.find((m) => m.id === medicineId);
       return medicine ? { medicine, ...stats } : null;
     })
     .filter((entry): entry is { medicine: Medicine; sold: number; revenue: number } => entry !== null)
@@ -465,11 +481,11 @@ export function dashboardSnapshot(state: AppState): DashboardSnapshot {
     todayRevenue: today.net,
     todayTransactions: today.count,
     todayMargin: today.margin,
-    stockCount: state.medicines.length,
+    stockCount: medicines.length,
     lowStockCount: statuses.filter((s) => s === 'low_stock').length,
     outOfStockCount: statuses.filter((s) => s === 'out_of_stock').length,
-    expiringValueAtCost: expiringValue(state.medicines),
-    expiringCount: expiryBuckets(state.medicines).length,
+    expiringValueAtCost: expiringValue(medicines),
+    expiringCount: expiryBuckets(medicines).length,
     pendingPricing: state.stockReceipts.filter((r) => r.status === 'pending_pricing').length,
     outstandingCredit: add(
       sum(state.creditAccounts.map((account) => account.outstandingBalance)),

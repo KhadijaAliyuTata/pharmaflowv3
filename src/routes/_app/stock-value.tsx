@@ -29,6 +29,8 @@ import {
 import { percentOf } from '~/domain/money';
 import { stockValuation, stockValuationTotals } from '~/domain/dashboard';
 import { useCurrentUser, usePharmacy } from '~/store/pharmacy';
+import { useMedicines } from '~/hooks/use-medicines';
+import { useIsOwner } from '~/hooks/use-is-owner';
 
 /**
  * Stock value — the detail behind the owner dashboard's "Stock Value" card.
@@ -59,9 +61,11 @@ export const Route = createFileRoute('/_app/stock-value')({
 });
 
 function StockValueScreen() {
-  const medicines = usePharmacy((state) => state.medicines);
-  const { role } = useCurrentUser();
-  const isOwner = role === 'owner';
+  // Catalogue from Supabase in live mode; useMedicines has no local
+  // fallback there, so a failed read surfaces as an error, not as seed data.
+  const { medicines } = useMedicines();
+  // Authoritative: pf_is_owner() reads branch_memberships.role.
+  const isOwner = useIsOwner();
 
   const rows = useMemo(() => stockValuation({ medicines }), [medicines]);
   const totals = useMemo(() => stockValuationTotals(rows), [rows]);

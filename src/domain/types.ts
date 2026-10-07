@@ -86,6 +86,16 @@ export type StockStatus =
   | 'expiring_soon'
   | 'expired';
 
+/**
+ * How a product may be sold.
+ *
+ * Display casing only. The database enum is lowercase (`otc`, `prescription`,
+ * `controlled`); the mapping in `src/hooks/medicine-mapping.ts` translates between
+ * the two, so no screen has to know which one it is holding. Exported as a named
+ * type because the mapping needs to name the target.
+ */
+export type PrescriptionStatus = 'OTC' | 'Prescription' | 'Controlled';
+
 /** Days from today at which stock is flagged as expiring soon. */
 export const EXPIRY_WARNING_DAYS = 90;
 
@@ -140,7 +150,7 @@ export interface Medicine {
 
   commonUse: string;
   storage: string;
-  prescriptionStatus: 'OTC' | 'Prescription' | 'Controlled';
+  prescriptionStatus: PrescriptionStatus;
   warnings: string[];
 
   isBrand: boolean;

@@ -26,6 +26,7 @@ import { useSuppliers } from '~/hooks/use-suppliers';
 import type { Supplier } from '~/domain/types';
 import { useCurrentUser, usePharmacy } from '~/store/pharmacy';
 import { useSeedQuery } from '~/lib/use-seed-query';
+import { useMedicines } from '~/hooks/use-medicines';
 
 export const Route = createFileRoute('/_app/suppliers')({
   // Seeded by the header's global search so a supplier result opens the
@@ -42,7 +43,9 @@ function SuppliersScreen() {
   // branch context resolves or when no backend is configured. Medicines are still
   // localStorage — see docs/PHASE-0-DATA-MIGRATION.md.
   const { suppliers, loading, error, source } = useSuppliers();
-  const medicines = usePharmacy((state) => state.medicines);
+  // Catalogue from Supabase in live mode; useMedicines has no local
+  // fallback there, so a failed read surfaces as an error, not as seed data.
+  const { medicines } = useMedicines();
   const { role } = useCurrentUser();
   const [query, setQuery] = useSeedQuery(Route.useSearch().q);
 

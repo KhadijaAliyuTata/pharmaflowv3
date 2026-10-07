@@ -26,6 +26,7 @@ import {
 import { Money, PageHeader, SectionTitle, StatTile } from '~/components/app/primitives';
 import { formatCount, formatWhen, isoDate, money, multiply, sum } from '~/domain/money';
 import { findBaseUnit, findUnit } from '~/domain/units';
+import { useMedicines } from '~/hooks/use-medicines';
 import { usePharmacy, usePharmacyActions } from '~/store/pharmacy';
 import type { ReceiptStatus, StockMovementType } from '~/domain/types';
 
@@ -65,7 +66,9 @@ const RECEIPT_STATUS: Record<ReceiptStatus, { label: string; variant: 'warning' 
 };
 
 function StockReceiving() {
-  const medicines = usePharmacy((state) => state.medicines);
+  // Catalogue from Supabase in live mode; useMedicines has no local
+  // fallback there, so a failed read surfaces as an error, not as seed data.
+  const { medicines } = useMedicines();
   const suppliers = usePharmacy((state) => state.suppliers);
   const receipts = usePharmacy((state) => state.stockReceipts);
   const movements = usePharmacy((state) => state.stockMovements.slice(0, 20));

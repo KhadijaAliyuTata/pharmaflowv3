@@ -29,9 +29,10 @@
  * Branch switching is available via listAvailableBranches() / switchBranch();
  * AppState.branch remains a single object until the store is migrated.
  *
- * Nothing here is wired into the running app yet. The screens still read from
- * the localStorage store, deliberately — see `docs/PHASE-0-DATA-MIGRATION.md`
- * for the order in which they should be pointed at these repositories.
+ * The catalogue is the first layer wired into the running app, through
+ * `~/hooks/use-medicines`. Everything else still reads from the localStorage
+ * store, deliberately — see `docs/PHASE-0-DATA-MIGRATION.md` for the order in
+ * which they should be pointed at these repositories.
  */
 
 export { client, hasSession, isSupabaseConfigured, type Client } from './client';
@@ -59,7 +60,6 @@ export {
 
 export {
   addBatch,
-  createMedicine,
   getMedicine,
   listBatchCosts,
   listBatches,
@@ -68,7 +68,8 @@ export {
   listMedicines,
   searchMedicines,
   setBatchRecalled,
-  updateMedicine,
+  BATCH_COLUMNS,
+  MEDICINE_COLUMNS,
 } from './catalog';
 
 export {

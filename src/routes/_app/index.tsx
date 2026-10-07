@@ -60,7 +60,9 @@ import {
   type LedgerFilter,
 } from '~/domain/dashboard';
 import { dashboardSnapshot, reorderSuggestions } from '~/domain/selectors';
-import { useCurrentUser, usePharmacy } from '~/store/pharmacy';
+import { useMedicines } from '~/hooks/use-medicines';
+import { useIsOwner } from '~/hooks/use-is-owner';
+import { useCurrentUser, usePharmacy, usePharmacyState } from '~/store/pharmacy';
 
 export const Route = createFileRoute('/_app/')({
   component: Dashboard,
@@ -97,21 +99,33 @@ const ALL = 'all';
 function Dashboard() {
   // One selector per concern, so a stock edit does not re-render the sales
   // figures. This is the main reason the store is not a context.
-  const snapshot = usePharmacy(dashboardSnapshot);
-  const reorder = usePharmacy((state) => reorderSuggestions(state.medicines, state.suppliers));
+  // Snapshot is computed from the Supabase catalogue, not the store's seeded copy,
+  // Catalogue from Supabase in live mode. reorderSuggestions is a pure
+  // function of medicines + suppliers, so it is computed here rather than
+  // inside a store selector that would read the seeded collection.
+  const { medicines } = useMedicines();
+  const storeSnapshot = usePharmacyState();
+  // Snapshot figures come from the Supabase catalogue, not the store's seeded copy.
+  const snapshot = useMemo(
+    () => dashboardSnapshot(storeSnapshot, medicines),
+    [storeSnapshot, medicines],
+  );
   const notifications = usePharmacy((state) =>
     state.notifications.filter((n) => !n.read).slice(0, 4),
   );
   const creditAccounts = usePharmacy((state) => state.creditAccounts);
   const suppliers = usePharmacy((state) => state.suppliers);
-  const medicines = usePharmacy((state) => state.medicines);
+  const reorder = useMemo(
+    () => reorderSuggestions(medicines, suppliers),
+    [medicines, suppliers],
+  );
   const sales = usePharmacy((state) => state.sales);
   const auditEvents = usePharmacy((state) => state.auditEvents);
   const medicineRequests = usePharmacy((state) => state.medicineRequests);
   const users = usePharmacy((state) => state.users);
-  const branch = usePharmacy((state) => state.branch);
   const user = useCurrentUser();
-  const isOwner = user.role === 'owner';
+  // Authoritative: pf_is_owner() reads branch_memberships.role.
+  const isOwner = useIsOwner();
 
   // Operational Activities filters.
   const [ledgerFilter, setLedgerFilter] = useState<LedgerFilter>(EMPTY_LEDGER_FILTER);
@@ -154,7 +168,7 @@ function Dashboard() {
   return (
     <div className="space-y-6">
       {/* 1–3. Which pharmacy, who is signed in. */}
-      <OwnerHeader branch={branch} user={user} />
+      <OwnerHeader user={user} />
 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <Button render={<Link to="/pos" />}>
@@ -209,7 +223,11 @@ function Dashboard() {
         </div>
       )}
 
-      {/* 4–6. The three headline figures. Each opens the screen that explains it. */}
+      {/* 4–8. The five headline figures. Each opens the screen that explains it.
+          Expiring Stock and Demand Radar sit here rather than below the activity
+          log: all five answer what this pharmacy should do next, and splitting
+          them across the page meant the two most time-sensitive were the hardest
+          to find. */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {/* Today's Sales. Takings are always knowable — money taken in is not a
             secret — so this card is not owner-gated. */}
@@ -273,6 +291,61 @@ function Dashboard() {
           tone={isOwner ? 'positive' : 'neutral'}
           to="/stock-value"
           actionHint="Open stock value"
+        />
+
+        {/* Expiring Stock. Lifted out of the lower half of the page because a
+            stock count quietly approaching its expiry date is a headline, not a
+            footnote: it belongs beside Stock Value, where someone reads the value
+            of what is on the shelf. Concise card only - the per-batch table stays
+            on /expiry, so there is one expiry calculation in the app. */}
+        <StatTile
+          label="Expiring Stock"
+          value={
+            <span>
+              {expiring.productCount}{' '}
+              <span className="text-base font-normal text-muted-foreground">
+                product{expiring.productCount === 1 ? '' : 's'}
+              </span>
+              {' · '}
+              {expiring.unitsAffected}{' '}
+              <span className="text-base font-normal text-muted-foreground">units</span>
+            </span>
+          }
+          hint={
+            expiring.expiredCount > 0
+              ? `${expiring.expiredCount} already past date · ${expiring.criticalCount} within 30 days`
+              : `${expiring.criticalCount} within 30 days · next 90 days`
+          }
+          icon={<AlertTriangle className="size-4" />}
+          tone={
+            expiring.expiredCount > 0 ? 'critical' : expiring.productCount > 0 ? 'warning' : 'neutral'
+          }
+          to="/expiry"
+          actionHint="Open expiry screen"
+        />
+
+        {/* Demand Radar. Real recorded requests, or an honest zero. Beside the
+            expiry and stock figures because all three answer the same question:
+            what should this pharmacy be doing next. */}
+        <StatTile
+          label="Demand Radar"
+          value={
+            <span>
+              {radarSummary.openCount}{' '}
+              <span className="text-base font-normal text-muted-foreground">
+                unmet request{radarSummary.openCount === 1 ? '' : 's'} this week
+              </span>
+            </span>
+          }
+          hint={
+            radarSummary.requestCount === 0
+              ? 'No customer requests recorded'
+              : `${radarSummary.productCount} product${radarSummary.productCount === 1 ? '' : 's'} · ${radarSummary.unitsRequested} units asked for`
+          }
+          icon={<Radio className="size-4" />}
+          tone={radarSummary.emergencies > 0 ? 'warning' : 'neutral'}
+          to="/demand-radar"
+          actionHint="Open demand radar"
         />
       </div>
 
@@ -555,58 +628,6 @@ function Dashboard() {
           )}
         </CardContent>
       </Card>
-
-      {/* 10. Expiring Stock — a concise card, not the detailed list. The per-batch
-          table stays on /expiry, so there is one expiry calculation in the app. */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <StatTile
-          label="Expiring Stock"
-          value={
-            <span>
-              {expiring.productCount}{' '}
-              <span className="text-base font-normal text-muted-foreground">
-                product{expiring.productCount === 1 ? '' : 's'}
-              </span>
-              {' · '}
-              {expiring.unitsAffected}{' '}
-              <span className="text-base font-normal text-muted-foreground">units</span>
-            </span>
-          }
-          hint={
-            expiring.expiredCount > 0
-              ? `${expiring.expiredCount} already past date · ${expiring.criticalCount} within 30 days`
-              : `${expiring.criticalCount} within 30 days · next 90 days`
-          }
-          icon={<AlertTriangle className="size-4" />}
-          tone={
-            expiring.expiredCount > 0 ? 'critical' : expiring.productCount > 0 ? 'warning' : 'neutral'
-          }
-          to="/expiry"
-          actionHint="Open expiry screen"
-        />
-
-        {/* 11. Demand Radar. Real recorded requests, or an honest zero. */}
-        <StatTile
-          label="Demand Radar"
-          value={
-            <span>
-              {radarSummary.openCount}{' '}
-              <span className="text-base font-normal text-muted-foreground">
-                unmet request{radarSummary.openCount === 1 ? '' : 's'} this week
-              </span>
-            </span>
-          }
-          hint={
-            radarSummary.requestCount === 0
-              ? 'No customer requests recorded'
-              : `${radarSummary.productCount} product${radarSummary.productCount === 1 ? '' : 's'} · ${radarSummary.unitsRequested} units asked for`
-          }
-          icon={<Radio className="size-4" />}
-          tone={radarSummary.emergencies > 0 ? 'warning' : 'neutral'}
-          to="/demand-radar"
-          actionHint="Open demand radar"
-        />
-      </div>
 
       {/* Operational detail that did not earn a headline slot. */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">

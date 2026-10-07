@@ -34,6 +34,8 @@ import { MaybeMoney, Money, PageHeader, SectionTitle, StatTile } from '~/compone
 import { daysUntil, formatCount, formatDate, multiply, sum } from '~/domain/money';
 import { expiryBuckets } from '~/domain/selectors';
 import type { Medicine, MedicineBatch } from '~/domain/types';
+import { useMedicines } from '~/hooks/use-medicines';
+import { useIsOwner } from '~/hooks/use-is-owner';
 import { usePharmacy, usePharmacyActions } from '~/store/pharmacy';
 
 export const Route = createFileRoute('/_app/expiry')({
@@ -80,9 +82,11 @@ const GROUP_META: Record<
 const GROUPS: Group[] = ['expired', 'under_30', 'days_30_90'];
 
 function Expiry() {
-  const medicines = usePharmacy((state) => state.medicines);
-  const role = usePharmacy((state) => state.currentUser.role);
-  const isOwner = role === 'owner';
+  // Catalogue from Supabase in live mode; useMedicines has no local
+  // fallback there, so a failed read surfaces as an error, not as seed data.
+  const { medicines } = useMedicines();
+  // Authoritative: pf_is_owner() reads branch_memberships.role.
+  const isOwner = useIsOwner();
   const { adjustStock } = usePharmacyActions();
 
   const [writeOff, setWriteOff] = useState<ExpiryRow | null>(null);
@@ -226,7 +230,7 @@ function Expiry() {
       {writeOff && (
         <WriteOffDialog
           row={writeOff}
-          role={role}
+          isOwner={isOwner}
           onClose={() => setWriteOff(null)}
           adjustStock={adjustStock}
         />
@@ -387,12 +391,13 @@ type OperationResult = { ok: true } | { ok: false; error: string };
 
 function WriteOffDialog({
   row,
-  role,
+  isOwner,
   onClose,
   adjustStock,
 }: {
   row: ExpiryRow;
-  role: 'owner' | 'assistant';
+  /** Authoritative ownership from pf_is_owner(); see use-is-owner. */
+  isOwner: boolean;
   onClose: () => void;
   adjustStock: (medicineId: string, quantity: number, reason: string) => OperationResult;
 }) {
@@ -405,7 +410,7 @@ function WriteOffDialog({
   function submit() {
     setError(null);
 
-    if (role !== 'owner') {
+    if (!isOwner) {
       setError('Only an owner can write off stock');
       return;
     }

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { createFileRoute } from '@tanstack/react-router';
 import { Ban, Lock, MapPin, Pill, SearchX } from 'lucide-react';
 import { Badge } from '~/components/ui/badge';
@@ -10,6 +10,7 @@ import { Money, StatusBadge } from '~/components/app/primitives';
 import { findBaseUnit } from '~/domain/units';
 import { searchMedicines } from '~/domain/selectors';
 import { availabilityFor, usePortalCustomer } from '~/lib/portal';
+import { useMedicines } from '~/hooks/use-medicines';
 import { usePharmacy } from '~/store/pharmacy';
 
 export const Route = createFileRoute('/_portal/portal/search')({
@@ -31,7 +32,11 @@ function PortalSearch() {
   // the shared box's initial value.
   const { q } = Route.useSearch();
   const [branch] = usePharmacy((state) => [state.branch] as const);
-  const results = usePharmacy((state) => searchMedicines(state.medicines, q));
+  // Catalogue from Supabase. The portal guard admits any signed-in session, not
+  // only customers, so leaving this on the seeded collection would put demo
+  // products in front of a real pharmacist on a real project.
+  const { medicines } = useMedicines();
+  const results = useMemo(() => searchMedicines(medicines, q), [medicines, q]);
 
   // The catalog has one branch. Listing it once is honest; inventing four
   // pharmacies to fill a directory grid would be fiction.

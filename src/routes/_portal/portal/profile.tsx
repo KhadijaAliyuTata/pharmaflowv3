@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { createFileRoute } from '@tanstack/react-router';
 import {
   BadgeCheck,
@@ -18,6 +18,7 @@ import { Separator } from '~/components/ui/separator';
 import { Money, StatTile, StatusBadge } from '~/components/app/primitives';
 import { formatDate, formatRelative } from '~/domain/money';
 import { refillRows, usePortalCustomer } from '~/lib/portal';
+import { useMedicines } from '~/hooks/use-medicines';
 import { usePharmacy } from '~/store/pharmacy';
 
 export const Route = createFileRoute('/_portal/portal/profile')({
@@ -28,8 +29,11 @@ function PortalProfile() {
   const customer = usePortalCustomer();
   const branch = usePharmacy((state) => state.branch);
   const sales = usePharmacy((state) => state.sales);
-  const rows = usePharmacy((state) =>
-    customer === null ? [] : refillRows(customer, state.medicines, state.sales),
+  // Catalogue from Supabase, sales still local (Sales is a later migration step).
+  const { medicines } = useMedicines();
+  const rows = useMemo(
+    () => (customer === null ? [] : refillRows(customer, medicines, sales)),
+    [customer, medicines, sales],
   );
 
   if (customer === null) {

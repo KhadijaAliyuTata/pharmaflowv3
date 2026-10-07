@@ -5,11 +5,29 @@ import { fromQuery, ok, type Result } from './result';
 /**
  * Who the signed-in user is, and which pharmacy they belong to.
  *
- * This is the tenant/session foundation. The schema derives both from one row:
- * `profiles.branch_id` is the only isolation unit, and `profiles.role` is the
- * only thing `pf_is_owner()` consults. So the application never decides its own
- * tenant or its own role — it reads them, and the database uses the same two
- * values to enforce the boundary independently.
+ * This is the tenant/session foundation. Two things are read here, and they are
+ * not equally authoritative:
+ *
+ *   * `profiles.branch_id` is the isolation unit. Every RLS policy resolves it
+ *     through `pf_current_branch()`, so it is the tenant boundary.
+ *
+ *   * `profiles.role` is a **display cache**, not an authorization input. Migration
+ *     `20261005250000_branch_membership_role_authority` made
+ *     `branch_memberships.role` authoritative: `pf_current_role()` reads the
+ *     membership row for `auth.uid()` in the active branch, and `profiles.role` is
+ *     written only by `pf_sync_profile_membership` with `on conflict do nothing`,
+ *     which means the cache is never repaired from the source. A user demoted at
+ *     their branch keeps `profiles.role = 'owner'` until something rewrites it.
+ *
+ * An earlier version of this note claimed the opposite - that `profiles.role` was
+ * "the only thing `pf_is_owner()` consults". That was true before migration 8 and
+ * false after it, and it was exactly the kind of stale comment that leads someone
+ * to gate a permission on the cache.
+ *
+ * For an authoritative ownership check call `isOwner()` below, which RPCs
+ * `pf_is_owner()`. For the effective role per branch, read `branch_memberships.role`.
+ * The `role` on `TenantContext` is carried because the UI needs something to
+ * display; screens gating affordances should prefer `useIsOwner()` over it.
  *
  * `profiles` also holds customer rows (`is_customer = true`) that have no branch
  * and no staff role. Those are returned with a null branch, which is why the

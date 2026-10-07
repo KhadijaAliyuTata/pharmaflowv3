@@ -30,6 +30,8 @@ import {
 } from '~/domain/dashboard';
 import type { Medicine } from '~/domain/types';
 import { useCurrentUser, usePharmacy } from '~/store/pharmacy';
+import { useMedicines } from '~/hooks/use-medicines';
+import { useIsOwner } from '~/hooks/use-is-owner';
 
 export const Route = createFileRoute('/_app/reports')({
   // The owner dashboard's "Gross Profit Today" card deep-links here with
@@ -77,10 +79,12 @@ function ReportsScreen() {
   // existed, so an owner arriving from the sidebar sees no change.
   const { period } = Route.useSearch();
   const allSales = usePharmacy((state) => state.sales);
-  const medicines = usePharmacy((state) => state.medicines);
+  // Catalogue from Supabase in live mode; useMedicines has no local
+  // fallback there, so a failed read surfaces as an error, not as seed data.
+  const { medicines } = useMedicines();
   const suppliers = usePharmacy((state) => state.suppliers);
-  const { role } = useCurrentUser();
-  const isOwner = role === 'owner';
+  // Authoritative: pf_is_owner() reads branch_memberships.role.
+  const isOwner = useIsOwner();
 
   const sales = useMemo(() => salesInPeriod(allSales, period), [allSales, period]);
 
