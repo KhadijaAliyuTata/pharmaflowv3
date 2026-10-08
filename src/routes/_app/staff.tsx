@@ -1,9 +1,32 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createFileRoute } from '@tanstack/react-router';
-import { BadgeCheck, Filter, ShieldAlert, Stethoscope, Users } from 'lucide-react';
+import {
+  BadgeCheck,
+  Check,
+  Copy,
+  Filter,
+  LinkIcon,
+  ShieldAlert,
+  Stethoscope,
+  Trash2,
+  UserPlus,
+  Users,
+  X,
+} from 'lucide-react';
 import { Avatar, AvatarFallback } from '~/components/ui/avatar';
 import { Badge } from '~/components/ui/badge';
+import { Button } from '~/components/ui/button';
 import { Card, CardContent, CardHeader } from '~/components/ui/card';
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '~/components/ui/dialog';
 import {
   Empty,
   EmptyDescription,
@@ -11,6 +34,8 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from '~/components/ui/empty';
+import { Input } from '~/components/ui/input';
+import { Label } from '~/components/ui/label';
 import {
   Select,
   SelectContent,
@@ -29,7 +54,11 @@ import {
 import { PageHeader, SectionTitle, StatTile } from '~/components/app/primitives';
 import { formatRelative } from '~/domain/money';
 import { ACTION_LABEL, ACTION_TONE } from '~/domain/audit-labels';
-import { useCurrentUser, usePharmacy } from '~/store/pharmacy';
+import type { StaffRole } from '~/lib/db.types';
+import { invitationLink } from '~/lib/join-link';
+import { useIsOwner } from '~/hooks/use-is-owner';
+import { useStaff } from '~/hooks/use-staff';
+import { usePharmacy } from '~/store/pharmacy';
 
 export const Route = createFileRoute('/_app/staff')({
   // A staff search result lands here focused on that person: `?q=` is matched
@@ -56,10 +85,16 @@ function initials(name: string): string {
 }
 
 function StaffScreen() {
-  const users = usePharmacy((state) => state.users);
   const events = usePharmacy((state) => state.auditEvents);
   const currentUser = usePharmacy((state) => state.currentUser);
-  const { role } = useCurrentUser();
+
+  // Authoritative: `pf_is_owner()` resolves `branch_memberships.role`. The old
+  // check read `state.currentUser.role`, which is `profiles.role` - a display
+  // cache that a demotion never repairs, so it could keep offering this screen
+  // to somebody the database had already demoted.
+  const isOwner = useIsOwner() === true;
+  const staff = useStaff(isOwner);
+  const { members, invitations, canManage } = staff;
 
   const { q } = Route.useSearch();
 
@@ -68,8 +103,8 @@ function StaffScreen() {
   // anything that is not a known name leaves the filter on "All Staff".
   const [actor, setActor] = useState(() => {
     if (!q) return ALL;
-    const match = users.find((user) => user.name.toLowerCase() === q.trim().toLowerCase());
-    return match ? match.name : ALL;
+    const match = members.find((user) => user.fullName.toLowerCase() === q.trim().toLowerCase());
+    return match ? match.fullName : ALL;
   });
   const [action, setAction] = useState(ALL);
 
@@ -80,11 +115,16 @@ function StaffScreen() {
       setActor(ALL);
       return;
     }
-    const match = users.find((user) => user.name.toLowerCase() === q.trim().toLowerCase());
-    setActor(match ? match.name : ALL);
-  }, [q, users]);
+    const match = members.find((user) => user.fullName.toLowerCase() === q.trim().toLowerCase());
+    setActor(match ? match.fullName : ALL);
+  }, [q, members]);
 
   // v2 stored the audit array twice, under auditLogs and auditEvents. One source.
+  //
+  // A real seam, and worth naming: the audit log still comes from the store while
+  // the team comes from Supabase. `audit_events` exists and the database writes it,
+  // but it is not yet the source for this screen, so the two are not joined - the
+  // actor filter still matches on display name, exactly as before.
   const filtered = useMemo(
     () =>
       events.filter(
@@ -97,7 +137,7 @@ function StaffScreen() {
 
   const actions = useMemo(() => Array.from(new Set(events.map((e) => e.action))), [events]);
 
-  if (role !== 'owner') {
+  if (!isOwner) {
     return (
       <div className="space-y-6">
         <PageHeader title="Staff & Audit" />
@@ -123,23 +163,47 @@ function StaffScreen() {
         title="Staff & Audit"
         description="Who works here, and what they did."
         meta={
-          <p className="text-xs text-muted-foreground">
-            Read only. Inviting staff or changing permissions is not wired up.
-          </p>
+          canManage ? (
+            <InviteDialog onInvite={staff.invite} />
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              Read only. Demo mode has no accounts to create or remove.
+            </p>
+          )
         }
       />
+
+      {/*
+        A failed read has to be visible. Falling back to the seeded team here would
+        be a lie about who has access to a real pharmacy, so an error replaces the
+        list rather than sitting quietly behind it.
+      */}
+      {staff.error && (
+        <p className="rounded-lg border border-warning-border bg-warning-subtle px-3 py-2 text-sm text-warning">
+          {staff.error}
+        </p>
+      )}
+
+      {staff.notice && (
+        <p
+          role="status"
+          className="rounded-lg border border-border bg-muted px-3 py-2 text-sm text-foreground"
+        >
+          {staff.notice}
+        </p>
+      )}
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
         <StatTile
           label="Team"
-          value={users.length}
-          hint={`${users.filter((u) => u.role === 'owner').length} owner · ${users.filter((u) => u.role === 'assistant').length} assistant`}
+          value={members.length}
+          hint={`${members.filter((u) => u.role === 'owner').length} owner · ${members.filter((u) => u.role === 'assistant').length} assistant`}
           icon={<Users className="size-4" />}
         />
         <StatTile
-          label="Can approve pricing"
-          value={users.filter((u) => u.canApprovePricing).length}
-          hint="The only path that prices incoming stock"
+          label="Owners"
+          value={members.filter((u) => u.role === 'owner').length}
+          hint="Only an owner approves incoming stock pricing"
           icon={<BadgeCheck className="size-4" />}
         />
         <StatTile
@@ -155,43 +219,115 @@ function StaffScreen() {
           <SectionTitle>Team</SectionTitle>
         </CardHeader>
         <CardContent>
-          <ul className="divide-y">
-            {users.map((user) => (
-              <li key={user.id} className="flex flex-wrap items-start gap-3 py-3">
-                <Avatar>
-                  <AvatarFallback>{initials(user.name)}</AvatarFallback>
-                </Avatar>
+          {members.length === 0 && !staff.loading ? (
+            <p className="py-6 text-center text-sm text-muted-foreground">
+              Nobody is on the team for this branch yet.
+            </p>
+          ) : (
+            <ul className="divide-y">
+              {members.map((user) => (
+                <li key={user.userId} className="flex flex-wrap items-start gap-3 py-3">
+                  <Avatar>
+                    <AvatarFallback>{initials(user.fullName)}</AvatarFallback>
+                  </Avatar>
 
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="text-sm font-medium">{user.name}</p>
-                    <Badge variant={user.role === 'owner' ? 'default' : 'secondary'}>
-                      {user.role === 'owner' ? 'Owner' : 'Assistant'}
-                    </Badge>
-                    {user.id === currentUser.id && <Badge variant="outline">Signed in</Badge>}
-                  </div>
-                  <p className="truncate text-xs text-muted-foreground">
-                    {user.email} · {user.phone}
-                  </p>
-                  {user.licenseNumber && (
-                    <p data-numeric className="tabular text-xs text-muted-foreground">
-                      PCN {user.licenseNumber}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-sm font-medium">{user.fullName}</p>
+                      <Badge variant={user.role === 'owner' ? 'default' : 'secondary'}>
+                        {user.role === 'owner' ? 'Owner' : 'Assistant'}
+                      </Badge>
+                      {user.userId === currentUser.id && <Badge variant="outline">Signed in</Badge>}
+                    </div>
+                    <p className="truncate text-xs text-muted-foreground">
+                      {user.phone ?? 'No phone on record'}
                     </p>
-                  )}
-                </div>
+                    {user.licenseNumber && (
+                      <p data-numeric className="tabular text-xs text-muted-foreground">
+                        PCN {user.licenseNumber}
+                      </p>
+                    )}
+                  </div>
 
-                <div className="shrink-0 text-right">
-                  {user.canApprovePricing ? (
-                    <Badge variant="success">Approves pricing</Badge>
-                  ) : (
-                    <Badge variant="outline">Requests pricing</Badge>
+                  {/*
+                    The last owner is never offered the button. Removing them
+                    would leave a branch that nobody can approve a price for, and
+                    it is a dead end that is much easier to avoid than to recover
+                    from - `pf_current_role()` would return NULL for everyone.
+                  */}
+                  {canManage && !isLastOwner(members, user.userId, currentUser.id) && (
+                    <RemoveMemberButton
+                      userId={user.userId}
+                      name={user.fullName}
+                      onRemove={staff.remove}
+                    />
                   )}
-                </div>
-              </li>
-            ))}
-          </ul>
+                </li>
+              ))}
+            </ul>
+          )}
         </CardContent>
       </Card>
+
+      {canManage && (
+        <Card>
+          <CardHeader className="pb-3">
+            <SectionTitle>Invitations</SectionTitle>
+          </CardHeader>
+          <CardContent>
+            {invitations.length === 0 ? (
+              <p className="py-6 text-center text-sm text-muted-foreground">
+                No invitations yet. Add someone above to get a code to share.
+              </p>
+            ) : (
+              <ul className="divide-y">
+                {invitations.map((invitation) => (
+                  <li key={invitation.id} className="flex flex-wrap items-center gap-3 py-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium">{invitation.email}</p>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {invitation.role === 'owner' ? 'Owner' : 'Assistant'} ·{' '}
+                        {formatRelative(invitation.createdAt)}
+                      </p>
+                    </div>
+
+                    <Badge
+                      variant={
+                        invitation.status === 'pending'
+                          ? 'secondary'
+                          : invitation.status === 'accepted'
+                            ? 'success'
+                            : 'outline'
+                      }
+                    >
+                      {invitation.status === 'pending'
+                        ? 'Waiting'
+                        : invitation.status === 'accepted'
+                          ? 'Joined'
+                          : 'Withdrawn'}
+                    </Badge>
+
+                    {invitation.status === 'pending' && (
+                      <>
+                        <CopyToken token={invitation.token} />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => void staff.revoke(invitation.token)}
+                        >
+                          <X className="size-4" />
+                          Withdraw
+                        </Button>
+                      </>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader className="border-b pb-3">
@@ -206,9 +342,9 @@ function StaffScreen() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value={ALL}>Everyone</SelectItem>
-                  {users.map((user) => (
-                    <SelectItem key={user.id} value={user.name}>
-                      {user.name}
+                  {members.map((user) => (
+                    <SelectItem key={user.userId} value={user.fullName}>
+                      {user.fullName}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -273,5 +409,218 @@ function StaffScreen() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+/* ------------------------------------------------------- managing the team */
+
+/**
+ * Whether removing this person would leave the branch with no owner.
+ *
+ * Counted over the real membership rows rather than the cached role, so the
+ * guard matches what the database would decide. `currentUserId` is the signed-in
+ * owner: someone cannot remove themselves out of the last owner seat either.
+ */
+function isLastOwner(
+  members: { userId: string; role: string }[],
+  userId: string,
+  currentUserId: string,
+): boolean {
+  if (userId !== currentUserId) return false;
+  return members.filter((member) => member.role === 'owner').length <= 1;
+}
+
+/** Owner-only: issue an invitation and show the code to share. */
+function InviteDialog({
+  onInvite,
+}: {
+  onInvite: (email: string, role: StaffRole) => Promise<boolean>;
+}) {
+  const [email, setEmail] = useState('');
+  const [role, setRole] = useState<StaffRole>('assistant');
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+
+  const submit = async () => {
+    setBusy(true);
+    setProblem(null);
+    const created = await onInvite(email.trim(), role);
+    setBusy(false);
+
+    // Only close on a confirmed success, so a refusal leaves the typed address
+    // in the box rather than discarding it.
+    if (created) {
+      setEmail('');
+      setRole('assistant');
+      setOpen(false);
+    } else {
+      setProblem('That invitation was not created. See the message above.');
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger
+        render={
+          <Button type="button" size="sm">
+            <UserPlus className="size-4" />
+            Add staff
+          </Button>
+        }
+      />
+
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Add someone to your team</DialogTitle>
+          <DialogDescription>
+            They set their own password. You never see it, and this app never stores it.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="invite-email">Their email address</Label>
+            <Input
+              id="invite-email"
+              type="email"
+              autoComplete="off"
+              placeholder="name@example.com"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              The invitation only works for this exact address. Share the code privately —
+              anyone holding it still cannot use it under another address.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="invite-role">Role</Label>
+            <Select value={role} onValueChange={(value) => setRole((value ?? 'assistant') as StaffRole)}>
+              <SelectTrigger id="invite-role" size="sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="assistant">Assistant</SelectItem>
+                <SelectItem value="owner">Owner</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Only an owner can approve incoming stock pricing. An assistant can request it.
+            </p>
+          </div>
+
+          {problem && <p className="text-sm text-warning">{problem}</p>}
+        </div>
+
+        <DialogFooter>
+          <DialogClose render={<Button type="button" variant="outline" />}>Cancel</DialogClose>
+          <Button type="button" onClick={() => void submit()} disabled={busy || !email.trim()}>
+            {busy ? 'Creating…' : 'Create invitation'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * Copies an invitation code, or the full join link.
+ *
+ * Two buttons rather than one because they answer different needs: the code is
+ * what you read down the phone to someone standing at the counter, and the link
+ * is what goes into a message. The link is built from `invitationLink`, which
+ * takes the base address from configuration rather than from whatever browser the
+ * owner happens to be using — otherwise it would point at `localhost`, which means
+ * the reader's own device and not the pharmacy's.
+ */
+function CopyToken({ token }: { token: string }) {
+  const [copied, setCopied] = useState<'code' | 'link' | null>(null);
+
+  const copy = (what: 'code' | 'link', value: string) => {
+    void navigator.clipboard?.writeText(value).then(() => {
+      setCopied(what);
+      setTimeout(() => setCopied(null), 2000);
+    });
+  };
+
+  return (
+    <>
+      <Button type="button" variant="outline" size="sm" onClick={() => copy('code', token)}>
+        {copied === 'code' ? <Check className="size-4" /> : <Copy className="size-4" />}
+        {copied === 'code' ? 'Copied' : 'Copy code'}
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={() => copy('link', invitationLink(token))}
+      >
+        {copied === 'link' ? <Check className="size-4" /> : <LinkIcon className="size-4" />}
+        {copied === 'link' ? 'Copied' : 'Copy link'}
+      </Button>
+    </>
+  );
+}
+
+/**
+ * Owner-only: end someone's access.
+ *
+ * The confirmation says what actually happens — the account survives, their place
+ * at this branch does not — because "remove" invites the assumption that a person
+ * and their access are the same thing.
+ */
+function RemoveMemberButton({
+  userId,
+  name,
+  onRemove,
+}: {
+  userId: string;
+  name: string;
+  onRemove: (userId: string, name: string) => Promise<boolean>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger
+        render={
+          <Button type="button" variant="ghost" size="sm">
+            <Trash2 className="size-4" />
+            Remove
+          </Button>
+        }
+      />
+
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Remove {name}?</DialogTitle>
+          <DialogDescription>
+            They lose access to this pharmacy immediately, and it is recorded in the audit
+            log. Their account itself is kept, so they can be invited back later without
+            losing anything they did.
+          </DialogDescription>
+        </DialogHeader>
+
+        <DialogFooter>
+          <DialogClose render={<Button type="button" variant="outline" />}>Keep them</DialogClose>
+          <Button
+            type="button"
+            variant="destructive"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              const removed = await onRemove(userId, name);
+              setBusy(false);
+              if (removed) setOpen(false);
+            }}
+          >
+            {busy ? 'Removing…' : 'Remove access'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

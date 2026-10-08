@@ -742,6 +742,27 @@ export type BranchMembershipInsert = {
   is_default?: boolean;
 };
 
+/**
+ * A staff invitation, from `20261006090000_staff_invitations`.
+ *
+ * There is deliberately no `StaffInvitationInsert`. The table has no client
+ * write path at all: `authenticated` holds SELECT only, and every mutation goes
+ * through `pf_create_invitation` / `pf_revoke_invitation` / `pf_redeem_invitation`.
+ * Modelling an insert type would invite a caller to build one.
+ */
+export type StaffInvitationRow = {
+  id: string;
+  branch_id: string;
+  email: string;
+  role: StaffRole;
+  token: string;
+  invited_by: string;
+  created_at: string;
+  accepted_at: string | null;
+  accepted_by: string | null;
+  revoked_at: string | null;
+};
+
 /* ---------------------------------------------------- Supabase Database */
 
 /**
@@ -826,6 +847,9 @@ export type Database = {
       audit_events: Table<AuditEventRow, AuditEventInsert, Partial<AuditEventInsert>>;
       notifications: Table<NotificationRow, NotificationInsert, Partial<NotificationInsert>>;
       branch_memberships: Table<BranchMembershipRow, BranchMembershipInsert, Partial<BranchMembershipInsert>>;
+      // Select-only by grant. `never` for insert/update models that on purpose:
+      // this table is not client-writable at any level.
+      staff_invitations: Table<StaffInvitationRow, never, never>;
     };
     Views: {
       pf_medicine_costs: View<MedicineCostRow>;
@@ -849,6 +873,21 @@ export type Database = {
       pf_is_customer: { Args: Record<PropertyKey, never>; Returns: boolean };
       pf_is_staff: { Args: Record<PropertyKey, never>; Returns: boolean };
       pf_set_active_branch: { Args: { p_branch_id: string }; Returns: string };
+      // From 20261006090000_staff_invitations. All three are SECURITY DEFINER and
+      // are the ONLY way staff_invitations is written; the table itself holds a
+      // SELECT grant and nothing else.
+      pf_create_invitation: {
+        Args: { p_email: string; p_role?: StaffRole };
+        Returns: Pick<
+          StaffInvitationRow,
+          'token' | 'email' | 'role' | 'created_at'
+        >[];
+      };
+      pf_revoke_invitation: { Args: { p_token: string }; Returns: boolean };
+      pf_redeem_invitation: {
+        Args: { p_token: string };
+        Returns: { branch: string; granted_role: StaffRole }[];
+      };
     };
     Enums: {
       staff_role: StaffRole;

@@ -83,10 +83,42 @@ async function bootstrapRoles(db) {
     create or replace function auth.uid() returns uuid language sql stable as $q$
       select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $q$;
 
+    /*
+     * auth.jwt() exists on real Supabase and returns the whole claim set, so a
+     * migration is entitled to reach for it - staff_invitations binds an invite
+     * to the signed-in address with auth.jwt() ->> 'email'. Without this stub
+     * that migration cannot be exercised here at all, and the test would report
+     * "function does not exist" rather than whether the binding works.
+     *
+     * Falls back to a claim built from sub alone when no full claim set is
+     * present, which is the state every suite that does not care about an email
+     * will be in.
+     */
+    create or replace function auth.jwt() returns jsonb language sql stable as $q$
+      select coalesce(
+        nullif(current_setting('request.jwt.claims', true), '')::jsonb,
+        jsonb_build_object('sub', nullif(current_setting('request.jwt.claim.sub', true), ''))
+      ) $q$;
+
     -- Harness-only: impersonate a signed-in user the way a JWT would.
     create or replace function set_actor(p uuid) returns void language plpgsql as $q$
     begin
       perform set_config('request.jwt.claim.sub', coalesce(p::text, ''), false);
+      -- Cleared as well, so one impersonated user's email claim cannot survive
+      -- into the next one. set_actor is what restores state after every
+      -- asActor call, so this is the single choke point that stops a suite
+      -- inheriting an identity it did not set up.
+      perform set_config('request.jwt.claims', '', false);
+    end $q$;
+
+    -- Harness-only: attach the email claim that belongs to the current actor.
+    -- Call AFTER set_actor, which clears it.
+    create or replace function set_actor_email(p text) returns void language plpgsql as $q$
+    begin
+      perform set_config('request.jwt.claims', jsonb_build_object(
+        'sub', nullif(current_setting('request.jwt.claim.sub', true), ''),
+        'email', p
+      )::text, false);
     end $q$;
   `);
 }

@@ -2,6 +2,10 @@ import { useSyncExternalStore } from 'react';
 import type { User } from '~/domain/types';
 import type { ProfileRow } from './db.types';
 import { getSupabase, isSupabaseConfigured } from './supabase';
+// Imported from the module rather than the `./supabase` barrel above, so pulling in
+// the redemption RPC does not pull the whole repository surface into this module.
+// `staff.ts` depends only on `client` and `result`, so this is not a cycle.
+import { redeemInvitation } from './supabase/staff';
 import { setPharmacyCurrentUser } from '~/store/pharmacy';
 
 /**
@@ -498,7 +502,15 @@ export function isOfflineSession(): boolean {
 
 /* ------------------------------------------------------------------ sign in */
 
-export type AuthResult = { ok: true; user: User } | { ok: false; error: string };
+/**
+ * `code` distinguishes the failures a caller can act on differently from a plain
+ * wrong password. `signUpWithInvitation` needs it: "you already have an account"
+ * means "sign in instead", and "confirm your email first" means "go and check
+ * your inbox", and neither should be rendered as a generic failure.
+ */
+export type AuthResult =
+  | { ok: true; user: User }
+  | { ok: false; error: string; code?: string };
 
 /**
  * Maps Supabase's error strings to something a pharmacist can act on.
@@ -583,6 +595,95 @@ export async function signIn(
     // sessionStorage so the next attendant does not inherit the session.
     moveSessionToSessionStorage();
   }
+
+  return { ok: true, user };
+}
+
+/**
+ * Create an account from an invitation, then attach it to a branch.
+ *
+ * ## Why this exists rather than an admin-created user
+ *
+ * Creating an auth user normally means `supabase.auth.admin.createUser`, which
+ * needs the `service_role` key. That key must never reach a browser bundle. So a
+ * new staff member signs themselves up here and sets their own password — this
+ * function never receives it, never stores it, and never sees it again.
+ *
+ * The password goes straight from the form field to Supabase over TLS. It is not
+ * logged, not put in the store, and not in any `Result` on the way back.
+ *
+ * ## The two outcomes that are not errors
+ *
+ * Supabase reports two things that look like failures but are not, and each needs
+ * its own message because the next step differs:
+ *
+ *   * `data.session === null` with a user means the deployment requires email
+ *     confirmation. The account exists but cannot redeem the invitation until the
+ *     address is confirmed. Saying "check your email" is the only useful answer.
+ *   * "User already registered" means someone already has an account at this
+ *     address. That is not a dead end — they should sign in instead, and the
+ *     redemption still works.
+ */
+export async function signUpWithInvitation(
+  email: string,
+  password: string,
+  inviteToken: string,
+): Promise<AuthResult> {
+  if (!isSupabaseConfigured()) {
+    return { ok: false, error: 'Sign-in is not configured on this deployment.' };
+  }
+
+  const supabase = getSupabase();
+
+  const { data, error } = await supabase.auth.signUp({
+    email: email.trim(),
+    password,
+  });
+
+  if (error) {
+    // Already registered is a routing decision, not a wall.
+    if (/already registered|already been registered/i.test(error.message)) {
+      return { ok: false, error: 'ALREADY_REGISTERED', code: 'already_registered' };
+    }
+    return { ok: false, error: humanise(error) };
+  }
+
+  if (!data.user) {
+    return { ok: false, error: 'That account could not be created. Try again.' };
+  }
+
+  // No session means the deployment wants the address confirmed first. Redemption
+  // is impossible until then, so say so instead of failing later on the code.
+  if (!data.session) {
+    return {
+      ok: false,
+      error:
+        'Check your email and confirm your address first. Your account is created, and the invitation is waiting for you.',
+      code: 'needs_confirmation',
+    };
+  }
+
+  // Signed in. Now the membership, which only `pf_redeem_invitation` may create.
+  const redeemed = await redeemInvitation(inviteToken);
+  if (!redeemed.ok) {
+    return { ok: false, error: redeemed.error, code: redeemed.code };
+  }
+
+  const user = await loadProfile(data.user.id, data.user.email ?? '');
+  if (!user) {
+    // The membership exists, so the person does have a place; only the display
+    // cache is missing. Sign-in will rebuild it.
+    return {
+      ok: false,
+      error:
+        'You have been added to this pharmacy. Sign in with your new password to finish setting up.',
+      code: 'profile_pending',
+    };
+  }
+
+  writeCache(user);
+  setPharmacyCurrentUser(user);
+  emit({ user, status: 'authenticated', offline: false });
 
   return { ok: true, user };
 }

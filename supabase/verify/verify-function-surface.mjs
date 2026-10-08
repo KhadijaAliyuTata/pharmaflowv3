@@ -60,14 +60,17 @@ const MUST_NEVER_BE_CALLABLE = [
  * Functions that are not part of the application schema and so are out of scope
  * for these assertions:
  *
- *  - `set_actor` is this harness's own JWT impersonation helper (harness.mjs).
+ *  - `set_actor` is this harness's own JWT impersonation helper (harness.mjs),
+ *    and `set_actor_email` is its companion for the email claim. Both are test
+ *    scaffolding that happens to land in `public` because that is the search
+ *    path, not application surface, and neither is reachable from a build.
  *  - `gen_random_uuid` stands in for the `pgcrypto` extension, which real
  *    Supabase installs and which legitimately has PUBLIC execute.
  *
  * Excluding them by name keeps the assertions strict for everything the
  * application actually owns, instead of loosening them for everything.
  */
-const HARNESS_OR_EXTENSION = new Set(['set_actor', 'gen_random_uuid']);
+const HARNESS_OR_EXTENSION = new Set(['set_actor', 'set_actor_email', 'gen_random_uuid']);
 
 const db = await freshDatabase();
 
