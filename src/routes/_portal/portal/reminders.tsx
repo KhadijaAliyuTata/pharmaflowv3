@@ -161,16 +161,15 @@ function PortalReminders() {
               <ul className="space-y-1 text-xs text-muted-foreground">
                 <li className="flex items-center gap-1.5">
                   <Smartphone className="size-3 shrink-0" />
-                  SMS needs SMS_API_KEY and SMS_SENDER_ID.
+                  SMS would need an SMS provider account for this pharmacy.
                 </li>
                 <li className="flex items-center gap-1.5">
                   <MessageCircle className="size-3 shrink-0" />
-                  WhatsApp needs WHATSAPP_TOKEN and WHATSAPP_PHONE_NUMBER_ID.
+                  WhatsApp would need a WhatsApp Business account.
                 </li>
                 <li className="flex items-center gap-1.5">
                   <Lock className="size-3 shrink-0" />
-                  A scheduled sender would also need a Worker cron trigger and a refill job.
-                  Neither exists.
+                  Nothing sends these automatically, and no schedule is set up.
                 </li>
               </ul>
             </CardContent>

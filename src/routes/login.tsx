@@ -4,9 +4,8 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { toast } from 'sonner';
-import { KeyRound, Lock, ShieldCheck, TriangleAlert } from 'lucide-react';
+import { ShieldCheck, TriangleAlert } from 'lucide-react';
 import { BrandLogo } from '~/components/brand-logo';
-import { Alert, AlertDescription, AlertTitle } from '~/components/ui/alert';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
 import { Card, CardContent } from '~/components/ui/card';
@@ -24,7 +23,6 @@ import {
 import {
   Form,
   FormControl,
-  FormDescription,
   FormField,
   FormItem,
   FormLabel,
@@ -33,11 +31,14 @@ import {
 import { Input } from '~/components/ui/input';
 import { Skeleton } from '~/components/ui/skeleton';
 import { Toaster } from '~/components/ui/sonner';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '~/components/ui/tabs';
 import { DEMO_ACCOUNTS, configProblem, isDemoMode, signIn, useSession } from '~/lib/session';
 
 /**
- * Sign in. One route, two tabs, two form components.
+ * Sign in.
+ *
+ * The customer tab is gone. It was a real form wired to a refusal — v3 has no
+ * customer credential to check — and a tab that cannot succeed is a dead end,
+ * not an explanation. Staff sign-in is the way in, so it is the only form here.
  *
  * v2 had four modes in one 802-line `LoginScreen.tsx` — staff, customer, customer
  * register, and a hand-rolled forgot-password modal built from a plain `div`
@@ -86,20 +87,7 @@ function Login() {
             <h1 className="text-xl font-semibold tracking-tight">Sign in</h1>
           </div>
 
-          <Tabs defaultValue="staff" className="gap-4">
-            <TabsList className="w-full">
-              <TabsTrigger value="staff">Staff</TabsTrigger>
-              <TabsTrigger value="customer">Customer</TabsTrigger>
-            </TabsList>
-
-            <TabsContent value="staff">
-              <StaffSignInForm />
-            </TabsContent>
-
-            <TabsContent value="customer">
-              <CustomerSignInForm />
-            </TabsContent>
-          </Tabs>
+          <StaffSignInForm />
         </div>
       </main>
 
@@ -252,86 +240,6 @@ function StaffSignInForm() {
   );
 }
 
-/* ---------------------------------------------------------- customer form */
-
-const customerSchema = z.object({
-  phone: z
-    .string()
-    .regex(/^(?:\+?234|0)\d{10}$/, 'Enter a Nigerian phone number'),
-  password: z.string().min(1, 'Enter your password'),
-});
-
-type CustomerValues = z.infer<typeof customerSchema>;
-
-const NO_CUSTOMER_AUTH = 'Customer accounts are not part of this build. Staff sign-in is the way in.';
-
-/**
- * A real form, deliberately wired to a refusal. v3's `Role` is
- * `'owner' | 'assistant'` and `Customer` is a pharmacy record, not a login —
- * there is no customer credential to check, so this validates the input and
- * then says so rather than pretending a session exists.
- */
-function CustomerSignInForm() {
-  const form = useForm<CustomerValues>({
-    resolver: zodResolver(customerSchema),
-    defaultValues: { phone: '', password: '' },
-  });
-
-  const onSubmit = () => {
-    form.setError('password', { message: NO_CUSTOMER_AUTH });
-  };
-
-  return (
-    <Form {...form}>
-      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4" noValidate>
-        <FormField
-          control={form.control}
-          name="phone"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Phone</FormLabel>
-              <FormControl
-                render={<Input type="tel" inputMode="tel" autoComplete="tel" className="h-9" />}
-                {...field}
-              />
-              <FormDescription>Registered on an order or prescription.</FormDescription>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-
-        <FormField
-          control={form.control}
-          name="password"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Password</FormLabel>
-              <FormControl
-                render={<Input type="password" autoComplete="current-password" className="h-9" />}
-                {...field}
-              />
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-
-        <Button type="submit" variant="outline" className="h-9 w-full">
-          Sign in
-        </Button>
-
-        <Alert>
-          <Lock />
-          <AlertTitle>Staff only</AlertTitle>
-          <AlertDescription>
-            This build has no customer credentials. Ordering and prescription
-            uploads come with the patient app.
-          </AlertDescription>
-        </Alert>
-      </form>
-    </Form>
-  );
-}
-
 /* ------------------------------------------------------------- demo panel */
 
 /**
@@ -375,8 +283,16 @@ function DemoAccounts({ onPick }: { onPick: (account: (typeof DEMO_ACCOUNTS)[num
 /* -------------------------------------------------------- forgot password */
 
 /**
- * States the gap instead of faking it. v2's modal showed "a 6-digit recovery
- * code has been sent to …" and sent nothing at all.
+ * States the real recovery path instead of faking one.
+ *
+ * v2's modal showed "a 6-digit recovery code has been sent to …" and sent
+ * nothing at all. This one says what is true and names the step that actually
+ * works: an owner can send a fresh invitation, and opening it sets a new
+ * password.
+ *
+ * What a self-service reset would need — a token table, an email provider — is
+ * set out in the handover notes rather than here, because an end user cannot act
+ * on either one.
  */
 function ForgotPassword() {
   const [open, setOpen] = useState(false);
@@ -389,30 +305,20 @@ function ForgotPassword() {
 
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Password reset is not wired up</DialogTitle>
+          <DialogTitle>You cannot reset a password from here yet</DialogTitle>
           <DialogDescription>
-            Nothing was sent, because there is nowhere to send it. Two pieces
-            are missing:
+            This build has no self-service reset, so nothing was sent and no email is
+            coming.
           </DialogDescription>
         </DialogHeader>
 
-        <ul className="space-y-2 text-sm">
-          <li className="flex gap-2">
-            <ShieldCheck className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-            <span>
-              <span className="font-medium">A token table.</span> One row per
-              request: user id, hashed token, expiry, and when it was used.
-            </span>
-          </li>
-          <li className="flex gap-2">
-            <KeyRound className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-            <span>
-              <span className="font-medium">An email provider.</span> Resend,
-              Postmark, or Cloudflare Email Service, plus a Worker binding to
-              send through.
-            </span>
-          </li>
-        </ul>
+        <p className="flex gap-2 text-sm">
+          <ShieldCheck className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+          <span>
+            Ask the owner of your pharmacy to send you a new invitation. Opening it lets
+            you set a new password, and it works only for the address it was sent to.
+          </span>
+        </p>
 
         <DialogFooter>
           <DialogClose render={<Button variant="outline" />}>Close</DialogClose>

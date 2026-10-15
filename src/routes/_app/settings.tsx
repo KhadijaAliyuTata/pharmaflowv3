@@ -43,31 +43,31 @@ const INTEGRATIONS: Integration[] = [
     title: 'Printer / ESC-POS',
     icon: Printer,
     purpose: 'Prints receipts and GRN slips on the 58mm thermal printer.',
-    requires: ['Worker binding ESC_POS_SERVICE', 'secret ESC_POS_TOKEN'],
+    requires: ['A receipt printer service'],
   },
   {
     title: 'WhatsApp Business',
     icon: MessageCircle,
     purpose: 'Sends order updates and prescription-ready messages.',
-    requires: ['WHATSAPP_TOKEN', 'WHATSAPP_PHONE_NUMBER_ID'],
+    requires: ['A WhatsApp Business account'],
   },
   {
     title: 'SMS gateway',
     icon: Smartphone,
     purpose: 'Text alerts for expiring batches and refill reminders.',
-    requires: ['SMS_API_KEY', 'SMS_SENDER_ID'],
+    requires: ['An SMS provider account'],
   },
   {
     title: 'Paystack',
     icon: CreditCard,
     purpose: 'Card and transfer checkout, with webhook settlement.',
-    requires: ['PAYSTACK_SECRET_KEY', 'PAYSTACK_WEBHOOK_SECRET'],
+    requires: ['A Paystack account'],
   },
   {
     title: 'Data & sync',
     icon: Database,
-    purpose: 'Moves this browser-local state into D1 so branches share records.',
-    requires: ['D1 binding DB', 'SYNC_TOKEN'],
+    purpose: 'Keeps one set of records across every branch.',
+    requires: ['A shared database'],
   },
 ];
 
@@ -83,11 +83,7 @@ function SettingsScreen() {
         description="What this branch is, and what is still missing."
         meta={
           <p className="text-xs text-muted-foreground">
-            Nothing here saves. State lives in this browser under{' '}
-            <code className="bg-muted text-muted-foreground rounded px-1 py-0.5 font-mono">
-              pharmaflow:state:v3
-            </code>{' '}
-            — there is no backend yet.
+            Everything on this page is read-only. Nothing here is editable or saved yet.
           </p>
         }
       />
@@ -129,9 +125,9 @@ function SettingsScreen() {
                       <ul className="flex flex-wrap gap-1">
                         {integration.requires.map((requirement) => (
                           <li key={requirement}>
-                            <code className="bg-muted text-muted-foreground rounded px-1.5 py-0.5 font-mono text-xs">
+                            <span className="bg-muted text-muted-foreground rounded px-1.5 py-0.5 text-xs">
                               {requirement}
-                            </code>
+                            </span>
                           </li>
                         ))}
                       </ul>
@@ -143,11 +139,8 @@ function SettingsScreen() {
           </div>
 
           <p className="pt-3 text-xs text-muted-foreground">
-            Secrets belong in{' '}
-            <code className="bg-muted text-muted-foreground rounded px-1 py-0.5 font-mono">
-              .dev.vars
-            </code>{' '}
-            locally and in Wrangler secrets in production, never in the repository.
+            Turning any of these on is an operator task, not something a pharmacy user can do
+            from this page.
           </p>
         </CardContent>
       </Card>
