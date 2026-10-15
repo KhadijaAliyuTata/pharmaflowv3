@@ -37,7 +37,7 @@ import {
 import { summariseSales } from '~/domain/selectors';
 import type { SaleLineRow } from '~/domain/dashboard';
 import { useIsOwner } from '~/hooks/use-is-owner';
-import { usePharmacy } from '~/store/pharmacy';
+import { useSales } from '~/hooks/use-sales';
 
 /**
  * Sales ledger — the detail behind the owner dashboard's "Today's Sales" card.
@@ -93,7 +93,9 @@ function paymentLabel(method: string): string {
 function SalesScreen() {
   const navigate = useNavigate();
   const { period } = Route.useSearch();
-  const sales = usePharmacy((state) => state.sales);
+  // The ledger from Supabase in live mode, the seeded sales in demo mode. Empty
+  // and flagged while it loads or if it fails, never the prototype's receipts.
+  const { sales, loading, error } = useSales();
   const isOwner = useIsOwner();
 
   /** Which multi-item receipt is expanded. `null` = all collapsed. */
@@ -213,7 +215,15 @@ function SalesScreen() {
           </SectionTitle>
         </CardHeader>
         <CardContent className="px-0">
-          {receipts.length === 0 ? (
+          {error ? (
+            <p role="alert" className="px-4 py-8 text-center text-sm text-muted-foreground">
+              {error}
+            </p>
+          ) : loading && receipts.length === 0 ? (
+            <p className="px-4 py-8 text-center text-sm text-muted-foreground">
+              Loading sales…
+            </p>
+          ) : receipts.length === 0 ? (
             <Empty className="border-0">
               <EmptyHeader>
                 <EmptyMedia variant="icon">

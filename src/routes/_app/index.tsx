@@ -62,6 +62,7 @@ import {
 import { dashboardSnapshot, reorderSuggestions } from '~/domain/selectors';
 import { useMedicines } from '~/hooks/use-medicines';
 import { useIsOwner } from '~/hooks/use-is-owner';
+import { useSales } from '~/hooks/use-sales';
 import { useCurrentUser, usePharmacy, usePharmacyState } from '~/store/pharmacy';
 
 export const Route = createFileRoute('/_app/')({
@@ -119,7 +120,9 @@ function Dashboard() {
     () => reorderSuggestions(medicines, suppliers),
     [medicines, suppliers],
   );
-  const sales = usePharmacy((state) => state.sales);
+  // The ledger from Supabase in live mode, the seeded sales in demo mode. Empty
+  // and flagged while it loads or if it fails, never the prototype's receipts.
+  const { sales, loading: salesLoading, error: salesError } = useSales();
   const auditEvents = usePharmacy((state) => state.auditEvents);
   const medicineRequests = usePharmacy((state) => state.medicineRequests);
   const users = usePharmacy((state) => state.users);
@@ -239,8 +242,20 @@ function Dashboard() {
             secret — so this card is not owner-gated. */}
         <StatTile
           label="Today's Sales"
-          value={<Money value={profit.sales} compact />}
-          hint={`${profit.transactionCount} transaction${profit.transactionCount === 1 ? '' : 's'} · ${profit.lineCount} line${profit.lineCount === 1 ? '' : 's'}`}
+          value={
+            salesError || salesLoading ? (
+              <MaybeMoney value={null} compact />
+            ) : (
+              <Money value={profit.sales} compact />
+            )
+          }
+          hint={
+            salesError
+              ? 'Sales could not be loaded'
+              : salesLoading
+                ? 'Loading sales…'
+                : `${profit.transactionCount} transaction${profit.transactionCount === 1 ? '' : 's'} · ${profit.lineCount} line${profit.lineCount === 1 ? '' : 's'}`
+          }
           icon={<Banknote className="size-4" />}
           tone="positive"
           to="/sales"

@@ -1,8 +1,10 @@
 import type {
   CreditLedgerInsert,
   SaleInsert,
-  SaleUpdate,
   SaleItemInsert,
+  SaleItemRow,
+  SaleRow,
+  SaleUpdate,
 } from '../db.types';
 import { client, hasSession, isSupabaseConfigured } from './client';
 import { fromList, ok, type Result } from './result';
@@ -25,32 +27,70 @@ import { fromList, ok, type Result } from './result';
 const OFFLINE = 'Supabase is not configured';
 const NO_SESSION = 'Not signed in';
 
+/**
+ * The sale-line read model, as a PostgREST column list.
+ *
+ * `sale_items` is one of the four tables whose blanket grant is revoked from
+ * `authenticated` and replaced with a column list (initial schema), because
+ * `cost_per_base_unit_snapshot` must not be readable: the till writes it, but
+ * only an owner reads it, through `pf_sale_item_costs`.
+ *
+ * A `sale_items(*)` embed expands to every column and therefore needs a privilege
+ * on every column, so it fails with `42501 permission denied for table
+ * sale_items` for every role — owner included. That is the bug this constant
+ * fixes; the same reasoning is written up at the top of `catalog.ts`. Naming the
+ * columns is what keeps the embed working, so adding `*` back re-breaks it.
+ *
+ * `batch_id` is granted separately by `20261005120000_unit_hierarchy`, after the
+ * table was created; it carries no cost and is safe to select.
+ */
+export const SALE_ITEM_COLUMNS =
+  'id,' +
+  'sale_id,' +
+  'batch_id,' +
+  'medicine_id,' +
+  'medicine_name,' +
+  'generic_name,' +
+  'unit_key,' +
+  'unit_name,' +
+  'unit_multiplier,' +
+  'quantity,' +
+  'base_units_total,' +
+  'unit_price,' +
+  'line_total';
+
+/** A sale header with its lines embedded. What `listSales`/`getSale` return. */
+export type SaleWithItems = SaleRow & { sale_items: SaleItemRow[] };
+
 /** Recent sales with their lines, newest first. */
-export async function listSales(limit = 50) {
+export async function listSales(limit = 50): Promise<Result<SaleWithItems[]>> {
   if (!isSupabaseConfigured()) return { ok: false, error: OFFLINE };
   if (!(await hasSession())) return { ok: false, error: NO_SESSION };
 
-  return fromList(
-    await client()
-      .from('sales')
-      .select('*, sale_items(*)')
-      .order('sold_at', { ascending: false })
-      .limit(limit),
-  );
+  const query = await client()
+    .from('sales')
+    .select(`*, sale_items(${SALE_ITEM_COLUMNS})`)
+    .order('sold_at', { ascending: false })
+    .limit(limit);
+
+  return fromList<SaleWithItems>({
+    data: (query.data ?? null) as SaleWithItems[] | null,
+    error: query.error,
+  });
 }
 
-export async function getSale(id: string) {
+export async function getSale(id: string): Promise<Result<SaleWithItems>> {
   if (!isSupabaseConfigured()) return { ok: false, error: OFFLINE } as const;
   if (!(await hasSession())) return { ok: false, error: NO_SESSION } as const;
 
   const { data, error } = await client()
     .from('sales')
-    .select('*, sale_items(*)')
+    .select(`*, sale_items(${SALE_ITEM_COLUMNS})`)
     .eq('id', id)
     .maybeSingle();
   if (error) return { ok: false, error: error.message, code: error.code } as const;
   if (!data) return { ok: false, error: 'Sale not found' } as const;
-  return ok(data);
+  return ok(data as unknown as SaleWithItems);
 }
 
 /**
