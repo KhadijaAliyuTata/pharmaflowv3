@@ -1,12 +1,15 @@
 import { useEffect, useState } from 'react';
-import { Navigate, createFileRoute } from '@tanstack/react-router';
-import { KeyRound, ShieldCheck } from 'lucide-react';
+import { Navigate, createFileRoute, useNavigate } from '@tanstack/react-router';
+import { BadgeCheck, KeyRound, ShieldCheck, TriangleAlert } from 'lucide-react';
 import { Button } from '~/components/ui/button';
 import { Input } from '~/components/ui/input';
 import { Label } from '~/components/ui/label';
 import { Toaster } from '~/components/ui/sonner';
 import { toast } from 'sonner';
+import { BrandLogo } from '~/components/brand-logo';
 import { DEMO_ACCOUNTS, configProblem, isDemoMode, signIn, signUpWithInvitation, useSession } from '~/lib/session';
+import { MIN_PASSWORD_LENGTH } from '~/lib/accept-invite';
+import { redeemInvitation } from '~/lib/supabase/staff';
 
 /**
  * Join a pharmacy with an invitation.
@@ -46,15 +49,40 @@ function Join() {
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
 
+  /**
+   * Set once someone has signed in on the already-registered path.
+   *
+   * This exists because that path previously reported "redeeming your
+   * invitation" and then returned without redeeming anything. The user ended up
+   * signed in to a pharmacy they had no membership in, with `profiles.branch_id`
+   * still null and an empty app, and no message saying so. Redemption is now an
+   * explicit step they take, and this flag is what makes it reachable.
+   */
+  const [signedInWithCode, setSignedInWithCode] = useState(false);
+
   useEffect(() => {
     if (fromLink) setToken(fromLink);
   }, [fromLink]);
 
-  // Already signed in: they should sign in instead of creating a second account.
-  if (status === 'authenticated') return <Navigate to="/" />;
-
   const problem0 = configProblem();
   if (problem0) return <NotAvailable />;
+
+  /**
+   * Someone who already has a session, holding an invitation code, has an
+   * unfinished job: the code has not been redeemed.
+   *
+   * Two routes lead here. They confirmed their address on an earlier visit and
+   * came back with the link, or they had an account before the invitation and
+   * signed in above. Both used to be redirected straight to the dashboard, which
+   * left the invitation permanently unredeemed and told them nothing.
+   *
+   * Signed in with no code, there is nothing to do here and the old redirect is
+   * correct.
+   */
+  if (status === 'authenticated' || signedInWithCode) {
+    if (!token.trim()) return <Navigate to="/" />;
+    return <RedeemScreen token={token.trim()} />;
+  }
 
   const submit = async () => {
     setBusy(true);
@@ -70,30 +98,49 @@ function Join() {
     setBusy(false);
 
     // An existing account at this address is a fork in the road, not a rejection:
-    // they can sign in with the password they already have and redeem the same code.
+    // they can sign in with the password they already have, and redeem the same
+    // code on the next screen. It is NOT redeemed here.
     if (result.code === 'already_registered') {
       const signedIn = await signIn(email.trim(), password);
       if (signedIn.ok) {
-        toast.success('Signed in — redeeming your invitation');
+        setSignedInWithCode(true);
         return;
       }
       setProblem(
-        'You already have an account at this address, and that password did not match. Sign in with your existing password to accept the invitation.',
+        'That password did not match the existing account at this address. Sign in with your current password, then open the invitation link again to redeem it.',
       );
       return;
     }
 
+    // The account exists and the person is signed in, but the membership was not
+    // granted — a withdrawn or expired invitation, most often. The session is real,
+    // so the next step is redemption, not another password. This is the case that
+    // previously left someone re-entering their password to reach the same screen.
+    if (result.code === 'redeem_failed') {
+      setSignedInWithCode(true);
+      return;
+    }
+
+    // Every other outcome has one correct next step and its own message. Nothing
+    // here is hedged: a failed acceptance is reported as a failed acceptance.
     setProblem(result.error);
   };
 
   return (
-    <div className="flex min-h-dvh items-center justify-center p-6">
+    <div className="flex min-h-dvh items-start justify-center overflow-y-auto p-6">
       <div className="w-full max-w-sm space-y-6">
-        <div className="space-y-1">
-          <h1 className="text-xl font-semibold tracking-tight">Join your pharmacy</h1>
-          <p className="text-sm text-muted-foreground">
-            Use the code your owner sent you, and choose your own password.
-          </p>
+        {/* The same lockup the sign-in screen shows, so somebody arriving from an
+            invitation email meets the product they were invited to rather than a
+            bare form. */}
+        <div className="space-y-5">
+          <BrandLogo tagline />
+
+          <div className="space-y-1">
+            <h1 className="text-xl font-semibold tracking-tight">Join your pharmacy</h1>
+            <p className="text-sm text-muted-foreground">
+              Use the code your owner sent you, and choose your own password.
+            </p>
+          </div>
         </div>
 
         {isDemoMode() && (
@@ -148,7 +195,8 @@ function Join() {
               onChange={(event) => setPassword(event.target.value)}
             />
             <p className="text-xs text-muted-foreground">
-              It goes straight to the sign-in service. This app never stores it.
+              At least {MIN_PASSWORD_LENGTH} characters. It goes straight to the sign-in
+              service, which stores it — this app never sees or keeps it.
             </p>
           </div>
 
@@ -174,8 +222,127 @@ function Join() {
         <p className="flex items-start gap-2 text-xs text-muted-foreground">
           <KeyRound className="mt-0.5 size-4 shrink-0" />
           <span>
-            Already have an account? Use your existing password above and the same code —
-            you will be signed in and the invitation redeemed.
+            Already have an account? Enter your existing password above and use the same
+            code. You will be signed in, then asked to redeem the invitation on the next
+            screen.
+          </span>
+        </p>
+      </div>
+
+      <Toaster position="bottom-right" />
+    </div>
+  );
+}
+
+/**
+ * The explicit redemption step.
+ *
+ * Reached two ways: a session already existed when the link was opened, or the
+ * already-registered path signed the person in just above. Both mean the same
+ * thing — authenticated, holding a code that has not been exchanged for a
+ * membership.
+ *
+ * Redemption is a button and not something that happens on arrival, for two
+ * reasons. It is the step that can fail (a withdrawn code, a code issued to a
+ * different address, an expired invitation), and a failure that happens silently
+ * on page load is exactly how the previous version lost the membership without
+ * saying so. And the person has just signed in or confirmed an address; being
+ * told what the next action is beats being dropped into an app they cannot use
+ * yet.
+ */
+function RedeemScreen({ token }: { token: string }) {
+  const navigate = useNavigate();
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const [redeemed, setRedeemed] = useState(false);
+
+  const redeem = async () => {
+    setBusy(true);
+    setProblem(null);
+
+    const result = await redeemInvitation(token);
+
+    setBusy(false);
+
+    if (!result.ok) {
+      // Nothing is claimed here. `redeemInvitation` also sets `profiles.branch_id`,
+      // so a failure after the membership was created is a partial success and
+      // its message says so rather than pretending nothing happened.
+      setProblem(result.error);
+      return;
+    }
+
+    setRedeemed(true);
+  };
+
+  if (redeemed) {
+    return (
+      <div className="flex min-h-dvh items-start justify-center overflow-y-auto p-6">
+        <div className="w-full max-w-sm space-y-4 text-center">
+          <div className="mx-auto flex size-10 items-center justify-center rounded-full bg-success-subtle text-success">
+            <BadgeCheck className="size-5" />
+          </div>
+          <div className="space-y-1">
+            <h1 className="text-xl font-semibold tracking-tight">You&rsquo;re on the team</h1>
+            <p className="text-sm text-muted-foreground">
+              Your invitation has been accepted and you have access to this pharmacy.
+            </p>
+          </div>
+          <Button type="button" className="w-full" onClick={() => void navigate({ to: '/' })}>
+            Go to the dashboard
+          </Button>
+        </div>
+
+        <Toaster position="bottom-right" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex min-h-dvh items-start justify-center overflow-y-auto p-6">
+      <div className="w-full max-w-sm space-y-5">
+        <div className="space-y-1">
+          <h1 className="text-xl font-semibold tracking-tight">Redeem your invitation</h1>
+          <p className="text-sm text-muted-foreground">
+            You&rsquo;re signed in. One more step to give you access to this pharmacy.
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="redeem-token">Invitation code</Label>
+          <Input
+            id="redeem-token"
+            value={token}
+            readOnly
+            spellCheck={false}
+            className="font-mono text-xs"
+          />
+        </div>
+
+        {problem && (
+          <p
+            role="alert"
+            className="flex items-start gap-2 rounded-lg border border-warning-border bg-warning-subtle px-3 py-2 text-sm text-warning"
+          >
+            <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+            <span>{problem}</span>
+          </p>
+        )}
+
+        <Button
+          type="button"
+          className="w-full"
+          disabled={busy || !token.trim()}
+          onClick={() => void redeem()}
+        >
+          {busy ? 'Redeeming…' : 'Redeem invitation'}
+        </Button>
+
+        <p className="flex items-start gap-2 text-xs text-muted-foreground">
+          <ShieldCheck className="mt-0.5 size-4 shrink-0" />
+          <span>
+            The code only works for the address it was sent to. If it was withdrawn, or
+            sent to someone else, ask your owner for a new one.
           </span>
         </p>
       </div>
@@ -188,7 +355,7 @@ function Join() {
 /** Shown when the deployment cannot authenticate anyone at all. */
 function NotAvailable() {
   return (
-    <div className="flex min-h-dvh items-center justify-center p-6">
+    <div className="flex min-h-dvh items-start justify-center overflow-y-auto p-6">
       <div className="w-full max-w-sm space-y-2 text-center">
         <h1 className="text-xl font-semibold tracking-tight">Not available</h1>
         <p className="text-sm text-muted-foreground">
