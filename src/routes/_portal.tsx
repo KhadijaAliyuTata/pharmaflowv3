@@ -6,11 +6,10 @@ import {
   redirect,
   useRouterState,
 } from '@tanstack/react-router';
-import { ArrowLeft, Pill } from 'lucide-react';
+import { Pill } from 'lucide-react';
 import { Badge } from '~/components/ui/badge';
-import { Button } from '~/components/ui/button';
 import { PORTAL_NAV } from '~/lib/portal';
-import { peekSession, useSession } from '~/lib/session';
+import { isDemoMode, peekSession, useSession } from '~/lib/session';
 import { useBranchName } from '~/lib/supabase/branch-context';
 import { usePharmacy } from '~/store/pharmacy';
 
@@ -35,9 +34,23 @@ import { usePharmacy } from '~/store/pharmacy';
  * `beforeLoad` for client navigations, and a `Navigate` once `status` resolves
  * for the server-rendered first paint. See the comment in `_app.tsx` for why the
  * server is allowed to render and only the client redirects.
+ *
+ * Live mode: the portal is hidden. `usePortalCustomer()` reads `state.customers[0]`
+ * — one seeded prototype customer — and any signed-in user may reach this route, so
+ * against a real database the portal would show one real customer's balance, debt
+ * and receipts to whoever happens to be signed in. That is a data-exposure defect,
+ * not a missing feature, so every non-demo build renders `PortalNotInBuild` in place
+ * of the shell and mounts no portal screen at all. Unhiding it needs customer
+ * identity first — `getMyCustomerRecord()` plus a guard requiring `is_customer`; see
+ * docs/LIVE-DATA-PLAN.md §13.
  */
 export const Route = createFileRoute('/_portal')({
   beforeLoad: () => {
+    // A live deployment serves no portal to anyone, so the session is irrelevant:
+    // the shell renders `PortalNotInBuild` rather than bouncing an anonymous
+    // visitor to a login screen that could not unlock anything. See the note above.
+    if (!isDemoMode()) return;
+
     if (peekSession().status === 'anonymous') {
       throw redirect({ to: '/login' });
     }
@@ -56,6 +69,11 @@ function PortalShell() {
 
   // Below the other hooks on purpose: an early return above them would be a
   // conditional hook, and React tears the route down when the session resolves.
+  //
+  // The build gate comes first: a live deployment serves no portal to anyone, so
+  // there is nothing to consult the session about. `isDemoMode()` is a build-time
+  // constant on both the server and the client, so the first paint agrees.
+  if (!isDemoMode()) return <PortalNotInBuild />;
   if (status === 'anonymous') return <Navigate to="/login" replace />;
 
   return (
@@ -79,15 +97,6 @@ function PortalShell() {
           <Badge variant="secondary" className="hidden sm:inline-flex">
             Customer
           </Badge>
-
-          <div className="ml-auto flex items-center gap-1">
-            {/* The staff side is a different app surface, not a parent of this
-                one. Back arrow, not breadcrumb. */}
-            <Button variant="ghost" size="sm" render={<Link to="/" />}>
-              <ArrowLeft className="size-4" />
-              <span className="hidden sm:inline">Staff side</span>
-            </Button>
-          </div>
         </div>
 
         {/* Desktop nav. Same items as the mobile tab bar, same source. */}
@@ -155,6 +164,30 @@ function PortalShell() {
           })}
         </ul>
       </nav>
+    </div>
+  );
+}
+
+/**
+ * Shown in place of the entire portal when this build is not a demo.
+ *
+ * Deliberately plain and deliberately final: there is no retry, because no amount
+ * of reloading makes a build contain a feature it does not contain, and no link
+ * back to the staff app, because the portal is not a child of it. The copy states
+ * what is true — the customer side is not connected to a live database yet —
+ * rather than implying the visitor did something wrong.
+ */
+function PortalNotInBuild() {
+  return (
+    <div className="flex min-h-dvh items-center justify-center p-6">
+      <div className="w-full max-w-md space-y-2 text-center">
+        <h1 className="text-xl font-semibold tracking-tight">Not part of this build</h1>
+        <p className="text-sm text-muted-foreground">
+          The customer portal is not connected to the pharmacy database yet. Accounts,
+          balances, orders and reminders have no live source, so this deployment does not
+          serve them. Ask your pharmacist at the counter.
+        </p>
+      </div>
     </div>
   );
 }
