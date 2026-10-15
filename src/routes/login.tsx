@@ -5,6 +5,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { toast } from 'sonner';
 import { KeyRound, Lock, ShieldCheck, TriangleAlert } from 'lucide-react';
+import { BrandLogo } from '~/components/brand-logo';
 import { Alert, AlertDescription, AlertTitle } from '~/components/ui/alert';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
@@ -33,7 +34,6 @@ import { Input } from '~/components/ui/input';
 import { Skeleton } from '~/components/ui/skeleton';
 import { Toaster } from '~/components/ui/sonner';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '~/components/ui/tabs';
-import { BRAND } from '~/lib/nav';
 import { DEMO_ACCOUNTS, configProblem, isDemoMode, signIn, useSession } from '~/lib/session';
 
 /**
@@ -80,11 +80,10 @@ function Login() {
 
       <main className="flex items-center justify-center p-6">
         <div className="w-full max-w-sm space-y-6">
-          <div className="space-y-1">
+          <div className="space-y-5">
+            <BrandLogo tagline />
+
             <h1 className="text-xl font-semibold tracking-tight">Sign in</h1>
-            <p className="text-sm text-muted-foreground">
-              {BRAND.defaultBranch} · Lagos
-            </p>
           </div>
 
           <Tabs defaultValue="staff" className="gap-4">
@@ -429,15 +428,7 @@ function ForgotPassword() {
 function BrandPanel() {
   return (
     <aside className="hidden flex-col justify-between bg-sidebar p-10 text-sidebar-foreground lg:flex">
-      <div className="flex items-center gap-2">
-        <div className="bg-sidebar-primary text-sidebar-primary-foreground flex size-8 items-center justify-center rounded-md text-sm font-bold">
-          {BRAND.mark}
-        </div>
-        <div className="leading-tight">
-          <p className="text-sm font-semibold">{BRAND.name}</p>
-          <p className="text-xs text-muted-foreground">{BRAND.defaultBranch}</p>
-        </div>
-      </div>
+      <BrandLogo />
 
       <div className="space-y-6">
         <h2 className="text-2xl font-semibold tracking-tight">
