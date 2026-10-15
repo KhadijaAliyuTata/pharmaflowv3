@@ -39,6 +39,11 @@ import { Switch } from '~/components/ui/switch';
 import { Money, PageHeader, StatTile, StatusBadge } from '~/components/app/primitives';
 import { cn } from '~/lib/cn';
 import { useHotkeys } from '~/lib/use-hotkeys';
+import { isDemoMode } from '~/lib/session';
+// The module directly, not `~/lib/supabase`: that specifier resolves to the
+// client singleton in `src/lib/supabase.ts`, which shadows the `supabase/`
+// directory. The barrel has the same export, but this path is unambiguous.
+import { completeSale as completeSaleRemote } from '~/lib/supabase/sales';
 import { add, money, multiply, subtract, sum } from '~/domain/money';
 import { convertToBaseUnits, findUnit } from '~/domain/units';
 import {
@@ -73,10 +78,28 @@ const PAYMENT_METHODS: { value: PaymentMethod; label: string }[] = [
 
 const NO_ACCOUNT = 'none';
 
+/**
+ * A key the server can recognise a repeated submission by.
+ *
+ * `crypto.randomUUID` is not available on every origin this has to run on, so
+ * the fallback is not decorative. Uniqueness only has to hold per cart, and the
+ * timestamp prefix keeps two carts in the same millisecond apart.
+ */
+function newIdempotencyKey(): string {
+  const uuid =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+  return `pos-${uuid}`;
+}
+
 function PointOfSale() {
   // Catalogue from Supabase in live mode; useMedicines has no local
   // fallback there, so a failed read surfaces as an error, not as seed data.
-  const { medicines } = useMedicines();
+  const { medicines, refresh: refreshMedicines } = useMedicines();
+  // In demo mode the store *is* the pharmacy and checkout stays local, exactly
+  // as it always was. In live mode the sale is the database's to record.
+  const live = !isDemoMode();
   const creditAccounts = usePharmacy((state) => state.creditAccounts);
   const today = usePharmacy((state) => summariseSales(salesSince(state.sales, 24)));
   const { checkout } = usePharmacyActions();
@@ -94,6 +117,18 @@ function PointOfSale() {
   const [creditAccountId, setCreditAccountId] = useState(NO_ACCOUNT);
   const [dispensedAgainstPrescription, setDispensedAgainstPrescription] = useState(false);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
+  /**
+   * True while a server round trip is in flight.
+   *
+   * The complete button is disabled and the hotkeys are ignored while this is
+   * set, so an attendant who double-clicks cannot submit twice. The idempotency
+   * key below is the second line of defence: the server returns the original
+   * sale for a repeated key, so even a submission that slipped past this guard
+   * cannot ring up twice.
+   */
+  const [submitting, setSubmitting] = useState(false);
+  /** One key per cart, reused across retries and replaced when the cart clears. */
+  const [idempotencyKey, setIdempotencyKey] = useState(() => newIdempotencyKey());
   const [scannerOpen, setScannerOpen] = useState(false);
   const [prescriptionOpen, setPrescriptionOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -162,7 +197,11 @@ function PointOfSale() {
   );
 
   const subtotal = sum(lines.map((line) => line.lineTotal));
-  const discount = money(Number(discountInput) || 0);
+  // A discount larger than the basket would drive the total — and every margin
+  // figure derived from it — negative. Clamped here rather than left to
+  // checkout, so the totals on screen are the totals that get recorded.
+  const discountEntered = money(Number(discountInput) || 0);
+  const discount = discountEntered > subtotal ? subtotal : discountEntered;
   const total = subtract(subtotal, discount);
 
   // More cash handed over than the sale costs is change, not revenue. Recording
@@ -229,29 +268,37 @@ function PointOfSale() {
   };
 
   /**
-   * Add the highlighted result. Deliberately does not clear the query: a sale
-   * is usually several lines from one search, so keeping the list lets the
-   * next ↓ Enter go straight into the next product.
+   * Add a product to the cart.
+   *
+   * Takes the product explicitly so a click can name the row it came from. It
+   * used to read the highlight instead, and a click set the cursor with
+   * `setCursor` first — a state update that has not landed when the add runs, so
+   * clicking row 4 added row 3. The keyboard path still passes nothing and keeps
+   * using the highlight.
+   *
+   * Deliberately does not clear the query: a sale is usually several lines from
+   * one search, so keeping the list lets the next ↓ Enter go straight into the
+   * next product.
    */
-  const addHighlighted = () => {
-    if (!active) return;
+  const addHighlighted = (medicine: Medicine | null | undefined = active) => {
+    if (!medicine) return;
 
     // Same gate as the Add button and the scanner, for the same reason: a
     // recall lock or expired batch must not be reachable by a faster path.
-    const block = saleBlock(active);
+    const block = saleBlock(medicine);
     if (block) {
-      toast.error(`${active.name} cannot be sold`, { description: block });
+      toast.error(`${medicine.name} cannot be sold`, { description: block });
       return;
     }
 
-    const unit = unitFor(active);
+    const unit = unitFor(medicine);
     if (!unit) {
-      toast.error(`${active.name} has no tradeable unit`);
+      toast.error(`${medicine.name} has no tradeable unit`);
       return;
     }
 
-    addToCart(active, unit.key);
-    toast.success(`${active.name} · ${unit.name} added`);
+    addToCart(medicine, unit.key);
+    toast.success(`${medicine.name} · ${unit.name} added`);
   };
 
   /** Move the cursor, clamped to the list. */
@@ -375,33 +422,89 @@ function PointOfSale() {
     setCreditAccountId(NO_ACCOUNT);
     setDispensedAgainstPrescription(false);
     setCheckoutError(null);
+    // A new cart is a new attempt, so it needs a new key.
+    setIdempotencyKey(newIdempotencyKey());
   };
 
-  const completeSale = () => {
+  /**
+   * Rings up the cart.
+   *
+   * Live mode goes to `pf_complete_sale`, which re-derives the quantities and the
+   * money from the database's own packaging and pricing, allocates stock FEFO
+   * under row locks, and writes the sale, its lines and the stock movements in
+   * one transaction. Demo mode keeps the original local path, because there the
+   * store genuinely is the pharmacy.
+   *
+   * Only `medicine_id`, `unit_key` and `quantity` are sent. The prices shown on
+   * screen are the same unit prices the server charges, so a successful sale
+   * always matches what the attendant saw.
+   */
+  const completeSale = async () => {
+    if (submitting) return;
     setCheckoutError(null);
 
-    const result = checkout({
-      lines,
-      paymentMethod,
-      amountPaid,
-      discount,
-      ...(discountReason.trim() ? { discountReason } : {}),
-      ...(customerId !== NO_ACCOUNT ? { customerId } : {}),
-      ...(creditAccountId !== NO_ACCOUNT ? { creditAccountId } : {}),
-      ...(dispensedAgainstPrescription ? { dispensedAgainstPrescription } : {}),
-    });
+    if (!live) {
+      const result = checkout({
+        lines,
+        paymentMethod,
+        amountPaid,
+        discount,
+        ...(discountReason.trim() ? { discountReason } : {}),
+        ...(customerId !== NO_ACCOUNT ? { customerId } : {}),
+        ...(creditAccountId !== NO_ACCOUNT ? { creditAccountId } : {}),
+        ...(dispensedAgainstPrescription ? { dispensedAgainstPrescription } : {}),
+      });
 
-    if (!result.ok) {
-      setCheckoutError(result.error);
+      if (!result.ok) {
+        setCheckoutError(result.error);
+        return;
+      }
+
+      toast.success(`${result.value.sale.receiptNumber} completed`);
+      clearSale();
+      // Hand focus back to search so the next sale starts from the keyboard
+      // without a reach for the mouse.
+      setQuery('');
+      searchRef.current?.focus();
       return;
     }
 
-    toast.success(`${result.value.sale.receiptNumber} completed`);
-    clearSale();
-    // Hand focus back to search so the next sale starts from the keyboard
-    // without a reach for the mouse.
-    setQuery('');
-    searchRef.current?.focus();
+    setSubmitting(true);
+    try {
+      const result = await completeSaleRemote({
+        lines: lines.map((line) => ({
+          medicineId: line.medicineId,
+          unitKey: line.unitKey,
+          quantity: line.quantity,
+        })),
+        paymentMethod,
+        amountPaid,
+        discount,
+        ...(discountReason.trim() ? { discountReason } : {}),
+        ...(customerId !== NO_ACCOUNT ? { customerId } : {}),
+        ...(creditAccountId !== NO_ACCOUNT ? { creditAccountId } : {}),
+        ...(dispensedAgainstPrescription ? { dispensedAgainstPrescription } : {}),
+        idempotencyKey,
+      });
+
+      if (!result.ok) {
+        setCheckoutError(result.error);
+        // The catalogue may have moved under the cart — a colleague sold the
+        // same stock, or the packaging changed. Re-read so a retry is made
+        // against current numbers rather than the ones that just failed.
+        refreshMedicines();
+        return;
+      }
+
+      toast.success(`${result.data.receiptNumber} completed`);
+      clearSale();
+      // Stock moved on the server; this till's copy is stale until it re-reads.
+      refreshMedicines();
+      setQuery('');
+      searchRef.current?.focus();
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   /**
@@ -440,7 +543,10 @@ function PointOfSale() {
     f2: () => setScannerOpen(true),
     'mod+enter': () => {
       if (lines.length === 0) return false;
-      completeSale();
+      // Returning false while a submission is in flight swallows the key, so a
+      // held-down shortcut cannot queue a second one behind the first.
+      if (submitting) return false;
+      void completeSale();
     },
     'shift+/': () => setShortcutsOpen(true),
     escape: () => setShortcutsOpen(false),
@@ -517,7 +623,11 @@ function PointOfSale() {
             ) : (
               results.map((medicine, index) => {
                 const block = saleBlock(medicine);
-                const active = index === cursor;
+                // Matches the rule behind `active` above, including its
+                // empty-query case: with no search term the list is the whole
+                // catalogue, and marking row 0 selected announced an arbitrary
+                // product as the chosen one.
+                const highlighted = Boolean(query.trim()) && index === cursor;
                 const unit = unitFor(medicine);
 
                 return (
@@ -525,15 +635,19 @@ function PointOfSale() {
                     key={medicine.id}
                     id={`pos-result-${medicine.id}`}
                     role="option"
-                    aria-selected={active}
+                    aria-selected={highlighted}
                     aria-disabled={block ? true : undefined}
                     onClick={() => {
                       setCursor(index);
-                      addHighlighted();
+                      // The product is passed, not inferred. `setCursor` is a
+                      // state update that has not been applied yet when this
+                      // runs, so reading the highlight here added the previously
+                      // highlighted line instead of the one clicked.
+                      addHighlighted(medicine);
                     }}
                     className={cn(
                       'flex cursor-pointer flex-wrap items-center gap-3 rounded-lg border px-3 py-2 transition-colors',
-                      active
+                      highlighted
                         ? 'border-ring bg-accent'
                         : 'border-transparent hover:bg-accent/50',
                       block && 'opacity-60',
@@ -871,10 +985,10 @@ function PointOfSale() {
 
               <Button
                 className="h-11 w-full"
-                onClick={completeSale}
-                disabled={lines.length === 0}
+                onClick={() => void completeSale()}
+                disabled={lines.length === 0 || submitting}
               >
-                Complete sale
+                {submitting ? 'Completing…' : 'Complete sale'}
                 <Money value={total} />
               </Button>
             </CardContent>
