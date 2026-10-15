@@ -36,7 +36,8 @@ import {
 } from '~/domain/dashboard';
 import { summariseSales } from '~/domain/selectors';
 import type { SaleLineRow } from '~/domain/dashboard';
-import { useCurrentUser, usePharmacy } from '~/store/pharmacy';
+import { useIsOwner } from '~/hooks/use-is-owner';
+import { usePharmacy } from '~/store/pharmacy';
 
 /**
  * Sales ledger — the detail behind the owner dashboard's "Today's Sales" card.
@@ -93,8 +94,7 @@ function SalesScreen() {
   const navigate = useNavigate();
   const { period } = Route.useSearch();
   const sales = usePharmacy((state) => state.sales);
-  const { role } = useCurrentUser();
-  const isOwner = role === 'owner';
+  const isOwner = useIsOwner();
 
   /** Which multi-item receipt is expanded. `null` = all collapsed. */
   const [expanded, setExpanded] = useState<string | null>(null);

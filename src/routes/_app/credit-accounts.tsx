@@ -39,7 +39,8 @@ import {
 import { formatDate, formatNaira, formatWhen, money, percentOf, subtract, sum } from '~/domain/money';
 import { creditAccountsOverLimit } from '~/domain/operations';
 import type { CreditAccount } from '~/domain/types';
-import { useCurrentUser, usePharmacy, usePharmacyActions } from '~/store/pharmacy';
+import { useIsOwner } from '~/hooks/use-is-owner';
+import { usePharmacy, usePharmacyActions } from '~/store/pharmacy';
 
 export const Route = createFileRoute('/_app/credit-accounts')({
   component: CreditAccountsScreen,
@@ -63,7 +64,7 @@ function utilisation(account: CreditAccount): number {
 
 function CreditAccountsScreen() {
   const accounts = usePharmacy((state) => state.creditAccounts);
-  const { role } = useCurrentUser();
+  const isOwner = useIsOwner();
   const { recordCreditPayment } = usePharmacyActions();
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -77,7 +78,7 @@ function CreditAccountsScreen() {
   const totalOutstanding = sum(accounts.map((a) => a.outstandingBalance));
   const totalLimit = sum(accounts.map((a) => a.creditLimit));
 
-  if (role !== 'owner') {
+  if (!isOwner) {
     return (
       <div className="space-y-6">
         <PageHeader title="Credit Accounts" />
