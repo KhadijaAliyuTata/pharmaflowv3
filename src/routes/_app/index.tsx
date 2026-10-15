@@ -10,9 +10,9 @@ import {
   Coins,
   Inbox,
   Lock,
-  Package,
   Radio,
   ShieldCheck,
+  Tablets,
   TriangleAlert,
   TrendingUp,
   UserPlus,
@@ -167,6 +167,11 @@ function Dashboard() {
 
   return (
     <div className="space-y-6">
+      {/* The page's own heading. The dashboard had none: `OwnerHeader` renders a
+          section, and every heading below it was an h2 or smaller, so the
+          document outline started at level two. */}
+      <h1 className="sr-only">Dashboard</h1>
+
       {/* 1–3. Which pharmacy, who is signed in. */}
       <OwnerHeader user={user} />
 
@@ -223,9 +228,10 @@ function Dashboard() {
         </div>
       )}
 
-      {/* 4–8. The five headline figures. Each opens the screen that explains it.
+      {/* 4–8. The six headline figures. Each opens the screen that explains it.
+          Total Products leads the money tiles because it sets their scale, and
           Expiring Stock and Demand Radar sit here rather than below the activity
-          log: all five answer what this pharmacy should do next, and splitting
+          log: all six answer what this pharmacy should do next, and splitting
           them across the page meant the two most time-sensitive were the hardest
           to find. */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
@@ -239,6 +245,33 @@ function Dashboard() {
           tone="positive"
           to="/sales"
           actionHint="Open sales ledger"
+        />
+
+        {/* Total Products. How much this pharmacy stocks, stated before any
+            money: every money tile below is a figure *about* these products, and
+            a reader who does not know the catalogue size cannot tell whether a
+            margin or an expiry count is large or small.
+
+            "Products" is the word the rest of the app already uses for this set —
+            the nav item, the /inventory screen, `valuationTotals.productCount` —
+            so the tile is named to match rather than introducing a synonym.
+
+            Catalogue breadth is not a cost or a purchase price, so it needs no
+            owner gate — owner and attendant see the identical tile here. Only the
+            value *of* the stock is owner-only, and that is Stock Value below.
+
+            Low stock is a standing condition, so it is reported here every time.
+            Out of stock is an alert with a route to fix it, and the "Needs
+            attention" strip directly above already carries that count — repeating
+            it here would print the same number twice on one screen. */}
+        <StatTile
+          label="Total Products"
+          value={snapshot.stockCount}
+          hint={`${snapshot.lowStockCount} low-stock product${snapshot.lowStockCount === 1 ? '' : 's'}`}
+          icon={<Tablets className="size-4" />}
+          tone={snapshot.outOfStockCount > 0 ? 'warning' : 'neutral'}
+          to="/inventory"
+          actionHint="Open inventory"
         />
 
         {/* Gross Profit Today. From `summariseSales`, which returns null when any
@@ -354,10 +387,14 @@ function Dashboard() {
         <CardHeader className="border-b pb-3">
           <SectionTitle
             action={
-              <Button variant="ghost" size="sm" render={<Link to="/staff" />}>
-                View Full Audit Log
-                <ChevronRight className="size-3.5" />
-              </Button>
+              // `/staff` is owner-only, so the link is too. It was shown to every
+              // role and led an assistant to a screen they cannot open.
+              isOwner && (
+                <Button variant="ghost" size="sm" render={<Link to="/staff" />}>
+                  View Full Audit Log
+                  <ChevronRight className="size-3.5" />
+                </Button>
+              )
             }
           >
             Recent Pharmacy Activities
@@ -399,16 +436,19 @@ function Dashboard() {
         <CardHeader className="border-b pb-3">
           <SectionTitle
             action={
-              <div className="flex flex-wrap items-center gap-1.5">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  render={<Link to="/staff" />}
-                >
-                  <UserPlus className="size-3.5" />
-                  Add Staff
-                </Button>
-              </div>
+              // Same rule as the audit-log link above: `/staff` is owner-only.
+              isOwner && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    render={<Link to="/staff" />}
+                  >
+                    <UserPlus className="size-3.5" />
+                    Add Staff
+                  </Button>
+                </div>
+              )
             }
           >
             Pharmacy Team — {team.length} member{team.length === 1 ? '' : 's'}
@@ -732,35 +772,39 @@ function Dashboard() {
         </Card>
       </div>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <QuickStat
-          to="/inventory"
-          icon={<Package className="size-4" />}
-          label="Products"
-          value={snapshot.stockCount}
-          note={`${snapshot.lowStockCount} low`}
-        />
+      {/* Reference-list sizes. Catalogue size is deliberately absent: it is a
+          headline figure above, and repeating the same count under a second name
+          further down the page reads as two different measurements. */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {/* "Orders" for a figure that counts medicine requests: the number and
+            the note both described requests, so the label was the odd one out. */}
         <QuickStat
           to="/orders"
           icon={<Inbox className="size-4" />}
-          label="Customer orders"
+          label="Customer requests"
           value={snapshot.openRequests}
           note="medicine requests open"
         />
-        <QuickStat
-          to="/credit-accounts"
-          icon={<Users className="size-4" />}
-          label="Credit accounts"
-          value={creditAccounts.length}
-          note={`${overLimit.length} over limit`}
-        />
-        <QuickStat
-          to="/suppliers"
-          icon={<Activity className="size-4" />}
-          label="Suppliers"
-          value={suppliers.length}
-          note={`${avgLeadTime}-day average lead time`}
-        />
+        {/* Credit accounts and suppliers are owner-only screens. The tiles were
+            shown to every role, and linked an assistant somewhere they cannot go. */}
+        {isOwner && (
+          <QuickStat
+            to="/credit-accounts"
+            icon={<Users className="size-4" />}
+            label="Credit accounts"
+            value={creditAccounts.length}
+            note={`${overLimit.length} over limit`}
+          />
+        )}
+        {isOwner && (
+          <QuickStat
+            to="/suppliers"
+            icon={<Activity className="size-4" />}
+            label="Suppliers"
+            value={suppliers.length}
+            note={`${avgLeadTime}-day average lead time`}
+          />
+        )}
       </div>
 
     </div>
