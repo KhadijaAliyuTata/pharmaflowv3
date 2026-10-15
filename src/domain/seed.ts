@@ -1237,3 +1237,48 @@ export function createSeedState(): AppState {
     stockMovements: [],
   };
 }
+
+/**
+ * The live-mode initial state: an empty pharmacy, not a seeded one.
+ *
+ * Used by the store in every non-demo build so that a screen reading from the
+ * store before its Supabase query resolves shows *nothing* rather than eleven
+ * fictional products. The seeded state remains the demo build's source of truth;
+ * this is its counterpart, kept beside it so the two stay in lockstep when
+ * `AppState` gains a field.
+ *
+ * The placeholder identity is chosen to fail closed. `id: ''` can never equal a
+ * real `auth.uid()`, and `role: 'assistant'` can never open owner UI. Real values
+ * are written the moment the session resolves — `setPharmacyCurrentUser` for the
+ * person, `setPharmacyBranch`/`setPharmacyUsers` for the branch and the team — so
+ * this is only ever the pre-resolution value, never a claim about the pharmacy.
+ */
+export function createEmptyState(): AppState {
+  return {
+    currentUser: { id: '', name: '', email: '', role: 'assistant', phone: '', canApprovePricing: false },
+    users: [],
+    medicines: [],
+    suppliers: [],
+    creditAccounts: [],
+    customers: [],
+    sales: [],
+    stockReceipts: [],
+    auditEvents: [],
+    notifications: [],
+    customerOrders: [],
+    medicineRequests: [],
+    stockMovements: [],
+    branch: {
+      id: '',
+      name: '',
+      address: '',
+      city: '',
+      state: '',
+      phone: '',
+      openingHours: '',
+      isOpenNow: false,
+      rating: 0,
+      reviewsCount: 0,
+    },
+  };
+}

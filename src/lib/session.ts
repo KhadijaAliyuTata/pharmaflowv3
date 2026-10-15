@@ -6,6 +6,7 @@ import { getSupabase, isSupabaseConfigured } from './supabase';
 // the redemption RPC does not pull the whole repository surface into this module.
 // `staff.ts` depends only on `client` and `result`, so this is not a cycle.
 import { redeemInvitation } from './supabase/staff';
+import { deploymentMode, isDemoMode } from './build-mode';
 import { setPharmacyCurrentUser } from '~/store/pharmacy';
 
 /**
@@ -30,154 +31,15 @@ import { setPharmacyCurrentUser } from '~/store/pharmacy';
 const CACHE_KEY = 'pharmaflow:profile:v1';
 
 /**
- * How this deployment is allowed to authenticate.
+ * The deployment mode and the demo gate now live in `~/lib/build-mode`.
  *
- * Three outcomes, and the distinction between the last two is the whole point of
- * this rewrite.
- *
- *   'live'  Supabase is configured. Real authentication, no demo path at all.
- *   'demo'  A DEVELOPMENT SERVER build, Supabase absent, and demo mode requested
- *           explicitly. Seeded accounts, no real data, banner on screen. This
- *           outcome does not exist in a production build.
- *   'broken' Everything else. Authentication is impossible and the app says so.
- *
- * ## Why demo mode is now opt-in rather than opt-out
- *
- * This used to be:
- *
- *     !isSupabaseConfigured() && import.meta.env.PUBLIC_DEMO_MODE !== 'false'
- *
- * which fails OPEN, twice over:
- *
- *   1. Only the exact literal string "false" turned it off. Unset, "0", "no",
- *      "off" and "true" all enabled a mode that signs the visitor in as an OWNER.
- *   2. `isSupabaseConfigured()` requires BOTH the URL and the anon key to be
- *      non-empty, so a deployment that supplied one and not the other — an
- *      ordinary CI or secret-configuration mistake — landed in demo mode rather
- *      than failing loudly.
- *
- * A production deploy missing one secret therefore served a fully interactive
- * owner console with seed data, and looked healthy while doing it. Worse, if the
- * missing secret was later supplied while the flag stayed stale, writes would go
- * to localStorage while reads showed seed data: silent data loss.
- *
- * The failure direction is now inverted: an absent flag means NO demo, so the
- * worst case is a clear "not configured" screen instead of a fake owner session.
- * A half-configured deployment is also called out specifically by
- * `configProblem`, because "your anon key is empty" is an actionable message and
- * "not configured" is not.
- *
- * ## Why the flag was not enough
- *
- * Opt-in fixed the accidental case but left the deliberate one. A flag is read
- * from the build's environment, so anything that can influence a production build
- * can set it: a CI variable, a `.env` copied into a deploy, a platform dashboard
- * default. With `PUBLIC_DEMO_MODE=true` on such a build, the demo sign-in — which
- * accepts any non-empty password for a seeded address — would authenticate a
- * visitor as the owner.
- *
- * So demo mode is now gated on `import.meta.env.DEV`, which Vite substitutes at
- * build time: `true` under `vite dev`, `false` under `vite build`. The decision is
- * made by the build, not by configuration, which means no environment variable in
- * any environment can enable it in shipped code. The seeded accounts moved to
- * `~/lib/demo-fixtures`, a module of pure constants that becomes unreferenced once
- * the demo branch folds away and is therefore tree-shaken out of the bundle.
+ * That module imports nothing from the app, so the store can read `isDemoMode()`
+ * without closing an import cycle through this file — this file imports
+ * `setPharmacyCurrentUser` from `~/store/pharmacy`. See `build-mode.ts` for why
+ * demo mode is both opt-in *and* build-gated, and for the definition of the three
+ * deployment modes. `isDemoMode` is re-exported below so existing callers keep
+ * importing it from here.
  */
-type DeploymentMode = 'live' | 'demo' | 'broken';
-
-/**
- * Whether this is a development server, decided at BUILD time.
- *
- * Vite replaces `import.meta.env.DEV` with the literal `true` under `vite dev`
- * and `false` under `vite build`. That substitution is the whole point: it makes
- * demo mode a build-time property rather than a runtime one, so no environment
- * variable, in any environment, can turn it on in shipped code.
- *
- * `PUBLIC_DEMO_MODE` alone could never carry that guarantee. It is read from the
- * build's environment, so anything that can influence the build — a CI variable,
- * a `.env` file copied into a deploy, a platform dashboard default — could set it
- * to `true` on a production build and the any-password sign-in would be live. An
- * earlier revision of this file relied on exactly that and was wrong: the flag was
- * checked, but a flag is a request, not a guarantee.
- */
-/**
- * Whether this is a development server, decided at BUILD time.
- *
- * `__DEV_SERVER__` is injected by `vite.config.ts` as `JSON.stringify(command ===
- * 'serve')`. That is the build-mode signal, not an environment variable, so nothing
- * that can influence a production build can make it true.
- *
- * It replaces `import.meta.env.DEV` here for a concrete reason found by inspecting
- * `dist/` after a build: `import.meta.env.DEV` is substituted in the CLIENT bundle but
- * left as a runtime lookup in the SSR/worker bundle this project builds with
- * `@cloudflare/vite-plugin`. A gate that folds in only one of the two outputs is not a
- * gate. `define` is applied to every environment Vite builds, so this constant is a
- * literal `false` in both.
- *
- * `PUBLIC_DEMO_MODE` alone could never carry this guarantee. It is read from the
- * build's environment, so a CI variable, a copied `.env`, or a platform dashboard
- * setting could set it on a production build and the any-password sign-in would be
- * live. An earlier revision of this file relied on exactly that: the flag was checked,
- * but a flag is a request, not a guarantee.
- */
-const IS_DEV_BUILD = __DEV_SERVER__ === true;
-
-/**
- * The single constant every demo code path is gated on.
- *
- * Deliberately a direct comparison against the build-time substitution rather than
- * a derived value from `resolveDeploymentMode()`. That matters: given
- * `import.meta.env.DEV === false` in the output, a minifier folds this to the
- * literal `false`, and every branch below gated on it becomes dead code
- * that is dropped. `DEMO_USERS` then has no remaining reader, so
- * `~/lib/demo-fixtures` is tree-shaken out of the bundle.
- *
- * The first attempt computed the mode through a function and compared the result,
- * which is correct but not foldable: the bundler kept the branch, kept the array,
- * and shipped the seeded accounts in a build where they could never authenticate.
- * Behaviourally that was already safe, and it still would have been — but inert
- * credentials in a shipped artefact are the kind of thing that gets mistaken for
- * live ones during a later audit, so the gate is written to be eliminable.
- *
- * `switchRole` is gated on the same constant for the same reason: it is a role
- * elevation control, and it must not survive into shipped code either.
- *
- * Read this constant as a necessary condition, never a sufficient one. It says
- * "this bundle came from a development server", not "demo mode is on", and the two
- * come apart on a dev server that also has a real Supabase project configured.
- * Every demo code path is therefore gated on `DEMO_SESSION` below, which is this
- * AND `DEMO_MODE`. Using this constant on its own was a fail-open: the app booted
- * authenticated as the seeded owner on a fully configured dev server.
- */
-const DEMO_ALLOWED = IS_DEV_BUILD;
-
-function resolveDeploymentMode(): DeploymentMode {
-  const url = import.meta.env.PUBLIC_SUPABASE_URL;
-  const anonKey = import.meta.env.PUBLIC_SUPABASE_ANON_KEY;
-
-  const urlPresent = typeof url === 'string' && url.trim().length > 0;
-  const keyPresent = typeof anonKey === 'string' && anonKey.trim().length > 0;
-
-  // Configured means BOTH halves. One without the other is a broken deployment,
-  // not an absent one, and it is the case that used to slip into demo mode.
-  if (urlPresent && keyPresent) return 'live';
-
-  // A production build has no demo mode at all. Not "disabled", not "requires a
-  // flag" — the branch does not exist, so there is nothing to set.
-  if (!IS_DEV_BUILD) return 'broken';
-
-  // Development server only, and opt-in on top of that. `true` is the single
-  // accepted affirmative value, so a typo disables demo rather than enabling a
-  // fake owner session.
-  const requested = String(import.meta.env.PUBLIC_DEMO_MODE ?? '').trim().toLowerCase();
-  if (requested === 'true') return 'demo';
-
-  return 'broken';
-}
-
-const DEPLOYMENT_MODE = resolveDeploymentMode();
-
-const DEMO_MODE = DEPLOYMENT_MODE === 'demo';
 
 /**
  * What is wrong with the configuration, or null when it is fine.
@@ -187,7 +49,7 @@ const DEMO_MODE = DEPLOYMENT_MODE === 'demo';
  * rendering an app nobody can sign into.
  */
 export function configProblem(): string | null {
-  if (DEPLOYMENT_MODE !== 'broken') return null;
+  if (deploymentMode() !== 'broken') return null;
 
   const url = import.meta.env.PUBLIC_SUPABASE_URL;
   const anonKey = import.meta.env.PUBLIC_SUPABASE_ANON_KEY;
@@ -206,17 +68,10 @@ export function configProblem(): string | null {
   return 'Supabase is not configured. Set PUBLIC_SUPABASE_URL and PUBLIC_SUPABASE_ANON_KEY. Demo data is available on a development server via PUBLIC_DEMO_MODE=true, but never in a production build.';
 }
 
-/**
- * Whether this build may use seeded demo data. Always false in production.
- *
- * Returns `DEMO_ALLOWED && DEMO_MODE` rather than `DEMO_MODE` alone so the
- * consumers in `branch-context.ts`, `use-suppliers.ts` and the sidebar also fold to
- * a constant, and so no caller can accidentally treat a mode name as proof that a
- * demo session exists.
- */
-export function isDemoMode(): boolean {
-  return DEMO_ALLOWED && DEMO_MODE;
-}
+// Re-exported from `~/lib/build-mode` so this file stays the single import site for
+// session state — every existing caller imports `isDemoMode` from `~/lib/session`.
+// The definition, and the note on why it is `DEMO_ALLOWED && DEMO_MODE`, live there.
+export { isDemoMode };
 
 /**
  * True when authentication is impossible in this deployment.
@@ -226,7 +81,7 @@ export function isDemoMode(): boolean {
  * app that has no backend.
  */
 export function isAuthUnavailable(): boolean {
-  return DEPLOYMENT_MODE === 'broken';
+  return deploymentMode() === 'broken';
 }
 
 // Re-exported so `session.ts` stays the single import site for session state and
@@ -275,7 +130,7 @@ export interface Session {
  * 'authenticated' after Supabase says so. An unconfigured one begins
  * 'unconfigured' and can never become authenticated at all.
  */
-// DEMO_SESSION, not DEMO_ALLOWED.
+// `isDemoMode()`, not the raw `DEMO_ALLOWED`.
 //
 //   `DEMO_ALLOWED` is `IS_DEV_BUILD`, which is true on ANY development server. Using
 //   it here meant a dev server with a real Supabase project configured still booted
@@ -284,12 +139,12 @@ export interface Session {
 //   rewrite exists to remove, reintroduced through the side door of the
 //   bundler-friendly gate.
 //
-//   `DEMO_ALLOWED && DEMO_MODE` is both correct and still foldable. In a production
-//   build `DEMO_ALLOWED` is the literal `false`, so the expression folds to `false`,
-//   this branch is eliminated, and the demo credentials are dropped from the bundle
-//   with it — exactly the property DEMO_ALLOWED was introduced for, without losing the
-//   meaning.
-const DEMO_SESSION = DEMO_ALLOWED && DEMO_MODE;
+//   `isDemoMode()` is `DEMO_ALLOWED && DEMO_MODE` — both correct and still foldable,
+//   because both constants are module-level `const`s in `~/lib/build-mode`. In a
+//   production build `DEMO_ALLOWED` is the literal `false`, so the expression folds to
+//   `false`, this branch is eliminated, and the demo credentials are dropped from the
+//   bundle with it.
+const DEMO_SESSION = isDemoMode();
 
 let current: Session = DEMO_SESSION
   ? { user: DEMO_USERS[0]!, status: 'authenticated', offline: false }
@@ -751,7 +606,7 @@ export function normalisePhone(input: string): string {
  * Only the role-bearing fields are replaced.
  */
 export async function refreshSessionProfile(): Promise<void> {
-  if (DEMO_MODE || !isSupabaseConfigured()) return;
+  if (isDemoMode() || !isSupabaseConfigured()) return;
 
   try {
     const { data, error } = await getSupabase().auth.getUser();

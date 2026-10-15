@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
-import type { AppState } from '~/domain/state';
+import type { AppState, Branch } from '~/domain/state';
 import type { User } from '~/domain/types';
-import { createSeedState } from '~/domain/seed';
+import { createEmptyState, createSeedState } from '~/domain/seed';
+import { isDemoMode } from '~/lib/build-mode';
 import * as ops from '~/domain/operations';
 import type { Result } from '~/domain/operations';
 
@@ -15,12 +16,12 @@ const STORAGE_KEY = 'pharmaflow:state:v3';
  * only the slice it reads, and the equality check stops unchanged slices from
  * causing a render at all.
  *
- * The server always sees the seed state. Persisted state is applied after
- * mount, so the first client render matches the server's HTML and React has
- * nothing to reconcile.
+ * The initial state is the seed in a demo build and empty in a live one, chosen
+ * from a build-time constant so the server snapshot and the first client render
+ * agree. Persisted state — which only a demo build has — is applied after mount.
  */
 class PharmacyStore {
-  private state: AppState = createSeedState();
+  private state: AppState = isDemoMode() ? createSeedState() : createEmptyState();
   private listeners = new Set<() => void>();
   private hydrated = false;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -53,6 +54,12 @@ class PharmacyStore {
     if (this.hydrated || typeof window === 'undefined') return;
     this.hydrated = true;
 
+    // Live mode has no legitimate persisted state: the only thing this key ever
+    // held is the demo prototype. Merging it back would resurrect seeded rows
+    // into a live session on every reload — the exact failure this gating exists
+    // to remove — so hydration is a demo-only path.
+    if (!isDemoMode()) return;
+
     try {
       const raw = window.localStorage.getItem(STORAGE_KEY);
       if (!raw) return;
@@ -75,6 +82,10 @@ class PharmacyStore {
    * serialise the whole state on every keystroke.
    */
   private schedulePersist() {
+    // Persistence is the demo prototype's only. In live mode nothing reads this
+    // key (hydration returns early above), so writing it would only leave a stale
+    // copy of the tenant identity behind — skip it.
+    if (!isDemoMode()) return;
     if (this.saveTimer) clearTimeout(this.saveTimer);
     this.saveTimer = setTimeout(() => {
       try {
@@ -86,7 +97,7 @@ class PharmacyStore {
   }
 
   reset() {
-    this.state = createSeedState();
+    this.state = isDemoMode() ? createSeedState() : createEmptyState();
     try {
       window.localStorage.removeItem(STORAGE_KEY);
     } catch {
@@ -277,6 +288,34 @@ export function setPharmacyCurrentUser(user: User): void {
   const state = store.getState();
   if (state.currentUser.id === user.id) return;
   store.setState({ ...state, currentUser: user });
+}
+
+/**
+ * Mirror the active branch into the store, for the header and settings screens.
+ *
+ * Owned by `~/lib/tenant-sync`, which reads it from `loadCurrentBranch()`. Before
+ * that resolves, `state.branch` is the empty placeholder from
+ * `createEmptyState()` — a blank label, never a plausible-looking number or a
+ * seeded address. Display only: nothing security-relevant reads this object,
+ * because it is client memory.
+ */
+export function setPharmacyBranch(branch: Branch): void {
+  const state = store.getState();
+  if (state.branch.id === branch.id && state.branch.name === branch.name) return;
+  store.setState({ ...state, branch });
+}
+
+/**
+ * Mirror the branch's team into the store, for the dashboard team table.
+ *
+ * Owned by `~/lib/tenant-sync`, which maps `listStaff()` onto `User`. Role here is
+ * display only — the authoritative gate is `useIsOwner()`/`pf_is_owner`, not this
+ * array.
+ */
+export function setPharmacyUsers(users: User[]): void {
+  const state = store.getState();
+  if (state.users === users) return;
+  store.setState({ ...state, users });
 }
 
 export function useCurrentUser() {
