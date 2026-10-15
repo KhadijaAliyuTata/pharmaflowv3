@@ -44,6 +44,19 @@ const TYPE_META: Record<
   medicine_request: { icon: UserPlus, label: 'Request', to: '/orders' },
 };
 
+/**
+ * Severity, in words. The tinted icon was the only thing carrying severity, so
+ * "urgent" lived entirely in colour. Every row now says it too.
+ */
+const SEVERITY_META: Record<
+  'urgent' | 'warning' | 'info',
+  { label: string; variant: 'danger' | 'warning' | 'neutral' }
+> = {
+  urgent: { label: 'Urgent', variant: 'danger' },
+  warning: { label: 'Warning', variant: 'warning' },
+  info: { label: 'Info', variant: 'neutral' },
+};
+
 function NotificationsScreen() {
   const notifications = usePharmacy((state) => state.notifications);
   const { markNotificationRead, markAllNotificationsRead } = usePharmacyActions();
@@ -62,7 +75,10 @@ function NotificationsScreen() {
             : `${notifications.length} total, all read`
         }
         actions={
-          read.length > 0 && (
+          // Any unread, not any *read*: the previous `read.length > 0` hid the
+          // button in exactly the case it is most needed — a screen where every
+          // notification is still unread.
+          unread.length > 0 && (
             <Button variant="outline" onClick={markAllNotificationsRead}>
               <CheckCheck />
               Mark all read
@@ -182,6 +198,12 @@ function NotificationList({
                         {notification.title}
                       </p>
                       <Badge variant="outline">{meta.label}</Badge>
+                      {/* Severity, spelled out. The tinted icon was the only
+                          thing carrying it, which left "urgent" entirely to
+                          colour. */}
+                      <Badge variant={SEVERITY_META[notification.severity].variant}>
+                        {SEVERITY_META[notification.severity].label}
+                      </Badge>
                       {!notification.read && (
                         <Badge variant="secondary" className="gap-1">
                           <span

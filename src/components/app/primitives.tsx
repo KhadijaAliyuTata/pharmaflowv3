@@ -195,9 +195,10 @@ export function StatTile({
   return (
     <Link
       to={to}
-      // The label is the accessible name; the value and hint are decorative
-      // context inside it.
-      aria-label={label}
+      // Deliberately no `aria-label`: naming the link from its own contents is
+      // what lets the figure reach a screen reader. The label is the heading and
+      // the value sits under it, so the tile announces as "Total stock value,
+      // ₦1,234,567, 12 transactions" rather than the label over and over.
       className="block h-full rounded-xl focus-visible:outline-none"
     >
       {card}
@@ -296,10 +297,27 @@ export function Percent({ value }: { value: number }) {
  * confident, wrong number on the screen; showing nothing without explanation
  * would read as a layout bug.
  */
-export function Unavailable({ className }: { className?: string }) {
+export function Unavailable({
+  className,
+  reason = 'This figure is not available.',
+}: {
+  className?: string;
+  /**
+   * Why the figure is missing.
+   *
+   * The old text was a `title` reading "Not available for your role", which was
+   * both unreachable by keyboard and wrong in the common case: an owner looking
+   * at cost-derived data they are entitled to, where the figure is simply not
+   * computed yet.
+   */
+  reason?: string;
+}) {
   return (
-    <span className={cn('text-muted-foreground', className)} title="Not available for your role">
-      &mdash;
+    <span className={cn('text-muted-foreground', className)}>
+      <span aria-hidden="true">&mdash;</span>
+      {/* Announced, not hovered: a tooltip on a non-focusable span is invisible
+          to anyone using a keyboard. */}
+      <span className="sr-only">{reason}</span>
     </span>
   );
 }

@@ -127,6 +127,9 @@ export function GlobalSearch({
     }
   }
 
+  const listboxId = 'global-search-results';
+  const optionId = (index: number) => `${listboxId}-option-${index}`;
+
   let running = -1;
 
   return (
@@ -151,6 +154,15 @@ export function GlobalSearch({
             onKeyDown={onKeyDown}
             placeholder="Search medicines, suppliers, staff, customers…"
             aria-label="Search"
+            // The input keeps focus while the arrow keys move the cursor, so the
+            // current option is reported through `aria-activedescendant` rather
+            // than by moving focus. Without it, arrow keys moved a highlight
+            // nothing could see.
+            role="combobox"
+            aria-expanded={flat.length > 0}
+            aria-controls={listboxId}
+            aria-autocomplete="list"
+            aria-activedescendant={flat.length > 0 ? optionId(activeIndex) : undefined}
             className="h-12 border-0 bg-transparent shadow-none focus-visible:ring-0"
           />
           {query !== '' && (
@@ -180,50 +192,65 @@ export function GlobalSearch({
               No matches for “{query.trim()}”.
             </p>
           ) : (
-            results.groups.map((group) => {
-              const Icon = ICON_FOR[group.category];
-              return (
-                <section key={group.category} className="mb-2 last:mb-0">
-                  <h3 className="flex items-center gap-1.5 px-2 py-1.5 text-xs font-medium text-muted-foreground">
-                    <Icon className="size-3.5" />
-                    {CATEGORY_LABEL[group.category]}
-                    <span className="text-muted-foreground/70">({group.results.length})</span>
-                  </h3>
-                  <ul>
+            /* A listbox, not a list of buttons. The input keeps focus; the arrow
+               keys move a cursor it owns, and `aria-activedescendant` is what
+               tells a screen reader which option is current. With plain buttons
+               nothing was announced as the selection moved. */
+            <div role="listbox" id={listboxId} aria-label="Search results">
+              {results.groups.map((group) => {
+                const Icon = ICON_FOR[group.category];
+                return (
+                  <div
+                    key={group.category}
+                    role="group"
+                    aria-label={CATEGORY_LABEL[group.category]}
+                    className="mb-2 last:mb-0"
+                  >
+                    {/* The group already carries the category as its accessible
+                        name, so the visual heading is hidden from the tree. */}
+                    <h3
+                      aria-hidden="true"
+                      className="flex items-center gap-1.5 px-2 py-1.5 text-xs font-medium text-muted-foreground"
+                    >
+                      <Icon className="size-3.5" />
+                      {CATEGORY_LABEL[group.category]}
+                      <span className="text-muted-foreground/70">({group.results.length})</span>
+                    </h3>
                     {group.results.map((result) => {
                       running += 1;
                       const index = running;
                       const active = index === activeIndex;
                       return (
-                        <li key={`${result.category}-${result.id}`}>
-                          <button
-                            type="button"
-                            // Highlight follows the keyboard cursor, not hover, so
-                            // Enter always opens what is visibly selected.
-                            onMouseEnter={() => setActiveIndex(index)}
-                            onClick={() => openResult(result)}
-                            className={`flex w-full items-center gap-3 rounded-md px-2 py-2 text-left ${
-                              active ? 'bg-muted text-foreground' : ''
-                            }`}
-                          >
-                            <span className="min-w-0 flex-1">
-                              <span className="block truncate text-sm font-medium">
-                                {result.title}
-                              </span>
-                              {result.subtitle && (
-                                <span className="block truncate text-xs text-muted-foreground">
-                                  {result.subtitle}
-                                </span>
-                              )}
+                        <div
+                          key={`${result.category}-${result.id}`}
+                          id={optionId(index)}
+                          role="option"
+                          aria-selected={active}
+                          // Highlight follows the keyboard cursor, not hover, so
+                          // Enter always opens what is visibly selected.
+                          onMouseEnter={() => setActiveIndex(index)}
+                          onClick={() => openResult(result)}
+                          className={`flex cursor-pointer items-center gap-3 rounded-md px-2 py-2 text-left ${
+                            active ? 'bg-muted text-foreground' : ''
+                          }`}
+                        >
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm font-medium">
+                              {result.title}
                             </span>
-                          </button>
-                        </li>
+                            {result.subtitle && (
+                              <span className="block truncate text-xs text-muted-foreground">
+                                {result.subtitle}
+                              </span>
+                            )}
+                          </span>
+                        </div>
                       );
                     })}
-                  </ul>
-                </section>
-              );
-            })
+                  </div>
+                );
+              })}
+            </div>
           )}
         </div>
 

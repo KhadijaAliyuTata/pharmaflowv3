@@ -91,7 +91,7 @@ function PortalShell() {
         </div>
 
         {/* Desktop nav. Same items as the mobile tab bar, same source. */}
-        <nav aria-label="Customer sections" className="hidden border-t md:block">
+        <nav aria-label="Customer sections (top)" className="hidden border-t md:block">
           <ul className="mx-auto flex w-full max-w-5xl items-center gap-1 px-4">
             {PORTAL_NAV.map((item) => {
               const active = pathname === item.to;
@@ -125,8 +125,10 @@ function PortalShell() {
         <Outlet />
       </main>
 
+      {/* Two navs render the same links. They need distinct accessible names,
+          or a screen reader lists two identical "Customer sections" landmarks. */}
       <nav
-        aria-label="Customer sections"
+        aria-label="Customer sections (bottom bar)"
         className="border-t bg-background safe-b fixed inset-x-0 bottom-0 z-40 md:hidden"
       >
         <ul className="flex items-stretch">
