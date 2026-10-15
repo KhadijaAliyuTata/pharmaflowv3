@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useRouterState } from '@tanstack/react-router';
+import { Link, useNavigate, useRouterState } from '@tanstack/react-router';
 import { toast } from 'sonner';
 import { Bell, Command, LogOut, Search, Store } from 'lucide-react';
 import {
@@ -94,7 +94,7 @@ export function AppHeader({
       <Breadcrumb>
         <BreadcrumbList>
           <BreadcrumbItem className="hidden md:block">
-            <BreadcrumbLink render={<a href="/" />}>PharmaFlow</BreadcrumbLink>
+            <BreadcrumbLink render={<Link to="/" />}>PharmaFlow</BreadcrumbLink>
           </BreadcrumbItem>
           <BreadcrumbSeparator className="hidden md:block" />
           <BreadcrumbItem>
@@ -140,7 +140,13 @@ export function AppHeader({
           <Command className="size-4" />
         </Button>
 
-        <Button variant="ghost" size="icon" className="size-8" aria-label="Notifications">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-8"
+          aria-label="Notifications"
+          render={<Link to="/notifications" />}
+        >
           <Bell className="size-4" />
         </Button>
 

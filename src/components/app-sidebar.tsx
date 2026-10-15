@@ -27,6 +27,7 @@ import {
   SidebarRail,
 } from '~/components/ui/sidebar';
 import { Avatar, AvatarFallback } from '~/components/ui/avatar';
+import { BrandMark } from '~/components/brand-logo';
 import { BRAND, ROLE_LABEL, sectionsForRole } from '~/lib/nav';
 import { useBranchName } from '~/lib/supabase/branch-context';
 import { DEMO_ACCOUNTS, isDemoMode, signOut, switchRole, useSession } from '~/lib/session';
@@ -52,7 +53,7 @@ export interface AppSidebarProps extends React.ComponentProps<typeof Sidebar> {
  */
 export function AppSidebar({
   userName,
-  branchName = BRAND.defaultBranch,
+  branchName,
   ...props
 }: AppSidebarProps) {
   const { user } = useSession();
@@ -82,14 +83,21 @@ export function AppSidebar({
               className="data-[slot=sidebar-menu-button]:p-1.5!"
               render={<Link to="/" />}
             >
-              <div className="bg-sidebar-primary text-sidebar-primary-foreground flex aspect-square size-7 items-center justify-center rounded-md text-xs font-bold">
-                {BRAND.mark}
-              </div>
+              {/* The real mark rather than the `PF` initials tile. It replaces a
+                  coloured square, so it carries its own colours and needs no
+                  background of its own — the cross and the wordmark beside it are
+                  both legible directly on the sidebar surface. */}
+              <BrandMark className="size-7 shrink-0" />
               <div className="grid flex-1 text-left leading-tight">
                 <span className="truncate text-sm font-semibold">{BRAND.name}</span>
-                <span className="truncate text-xs text-muted-foreground">
-                  {resolvedBranchName ?? branchName}
-                </span>
+                {/* Only when a branch is actually known. This used to fall back
+                    to a hard-coded branch name, which showed every pharmacy a
+                    branch that did not exist. */}
+                {(resolvedBranchName ?? branchName) && (
+                  <span className="truncate text-xs text-muted-foreground">
+                    {resolvedBranchName ?? branchName}
+                  </span>
+                )}
               </div>
             </SidebarMenuButton>
           </SidebarMenuItem>
@@ -114,7 +122,17 @@ export function AppSidebar({
                   <SidebarMenuItem key={item.to}>
                     <SidebarMenuButton
                       tooltip={item.label}
-                      render={<Link to={item.to} />}
+                      render={
+                        <Link
+                          to={item.to}
+                          // Marks the row you are on. Without it every item
+                          // rendered identically, so the sidebar could not say
+                          // where you were. `exact` matches the comparison the
+                          // breadcrumb's own `findNavItem` makes.
+                          activeProps={{ 'data-active': 'true' }}
+                          activeOptions={{ exact: true }}
+                        />
+                      }
                     >
                       <item.icon />
                       <span>{item.label}</span>

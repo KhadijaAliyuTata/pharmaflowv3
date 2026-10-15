@@ -96,7 +96,6 @@ export const NAV_SECTIONS: NavSection[] = [
         to: '/orders',
         icon: ClipboardList,
         keywords: ['orders', 'delivery', 'ecommerce'],
-        badge: 3,
       },
       {
         label: 'Pricing',
@@ -193,7 +192,6 @@ export const NAV_SECTIONS: NavSection[] = [
         to: '/notifications',
         icon: Bell,
         keywords: ['alert', 'notification', 'inbox'],
-        badge: 5,
       },
       {
         label: 'Settings',
@@ -243,7 +241,6 @@ export function findNavItem(to: string): NavItem | undefined {
 export const BRAND = {
   mark: 'PF',
   name: 'PharmaFlow',
-  defaultBranch: 'Ojota Branch',
   /** Rendered as the primary action in the header. */
   newSaleLabel: 'New Sale',
   newSaleTo: '/pos',
