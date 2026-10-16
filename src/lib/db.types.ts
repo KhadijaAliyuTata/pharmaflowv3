@@ -736,6 +736,21 @@ export type NotificationInsert = {
   link?: string | null;
 };
 
+/**
+ * The columns an UPDATE may write. `read_at` is set once, when a recipient
+ * clears a row, so it is not part of `NotificationInsert` (which omits
+ * server-owned columns) and is named here instead — the same shape as
+ * `SaleUpdate`.
+ *
+ * This is also the client-side statement of an RLS limit worth knowing: UPDATE
+ * is `notifications_staff_update`, whose `using`/`with check` are both
+ * `recipient_id = auth.uid()`. Only the addressed recipient can clear a row. A
+ * branch-wide row (`recipient_id is null`) is readable by the whole branch
+ * through `notifications_read` but is *not* updatable by it, so marking one read
+ * matches zero rows.
+ */
+export type NotificationUpdate = Partial<Pick<NotificationRow, 'read_at'>>;
+
 export type BranchMembershipInsert = {
   user_id: string;
   branch_id: string;
@@ -854,7 +869,7 @@ export type Database = {
       >;
       medicine_requests: Table<MedicineRequestRow, MedicineRequestInsert, Partial<MedicineRequestInsert>>;
       audit_events: Table<AuditEventRow, AuditEventInsert, Partial<AuditEventInsert>>;
-      notifications: Table<NotificationRow, NotificationInsert, Partial<NotificationInsert>>;
+      notifications: Table<NotificationRow, NotificationInsert, NotificationUpdate>;
       branch_memberships: Table<BranchMembershipRow, BranchMembershipInsert, Partial<BranchMembershipInsert>>;
       // Select-only by grant. `never` for insert/update models that on purpose:
       // this table is not client-writable at any level.

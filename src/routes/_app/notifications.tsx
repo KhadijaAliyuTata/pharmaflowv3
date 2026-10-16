@@ -20,7 +20,7 @@ import { PageHeader } from '~/components/app/primitives';
 import { cn } from '~/lib/utils';
 import { formatRelative } from '~/domain/money';
 import type { AppNotification, NotificationType } from '~/domain/types';
-import { usePharmacy, usePharmacyActions } from '~/store/pharmacy';
+import { useNotifications } from '~/hooks/use-notifications';
 
 export const Route = createFileRoute('/_app/notifications')({
   component: NotificationsScreen,
@@ -58,8 +58,11 @@ const SEVERITY_META: Record<
 };
 
 function NotificationsScreen() {
-  const notifications = usePharmacy((state) => state.notifications);
-  const { markNotificationRead, markAllNotificationsRead } = usePharmacyActions();
+  // From Supabase in live mode. useNotifications has no local fallback there, so
+  // a loading or failed read is empty and flagged, never the seeded alerts.
+  // `markRead`/`markAllRead` dispatch to the store in demo mode and to the
+  // database — which can only clear this caller's own rows — in live mode.
+  const { notifications, loading, error, markRead, markAllRead } = useNotifications();
 
   const unread = notifications.filter((n) => !n.read);
   const read = notifications.filter((n) => n.read);
@@ -79,7 +82,7 @@ function NotificationsScreen() {
           // button in exactly the case it is most needed — a screen where every
           // notification is still unread.
           unread.length > 0 && (
-            <Button variant="outline" onClick={markAllNotificationsRead}>
+            <Button variant="outline" onClick={markAllRead}>
               <CheckCheck />
               Mark all read
             </Button>
@@ -87,7 +90,19 @@ function NotificationsScreen() {
         }
       />
 
-      {!hasAny ? (
+      {error ? (
+        <Card>
+          <CardContent role="alert" className="py-10 text-center text-sm text-muted-foreground">
+            {error}
+          </CardContent>
+        </Card>
+      ) : loading && !hasAny ? (
+        <Card>
+          <CardContent className="py-10 text-center text-sm text-muted-foreground">
+            Loading notifications…
+          </CardContent>
+        </Card>
+      ) : !hasAny ? (
         <Card>
           <CardContent className="flex flex-col items-center gap-2 py-12 text-center">
             <BellOff className="size-6 text-muted-foreground" aria-hidden="true" />
@@ -116,21 +131,21 @@ function NotificationsScreen() {
           <TabsContent value="unread">
             <NotificationList
               notifications={unread}
-              onRead={markNotificationRead}
+              onRead={markRead}
               emptyLabel="You are all caught up."
             />
           </TabsContent>
           <TabsContent value="read">
             <NotificationList
               notifications={read}
-              onRead={markNotificationRead}
+              onRead={markRead}
               emptyLabel="Nothing read yet."
             />
           </TabsContent>
           <TabsContent value="all">
             <NotificationList
               notifications={notifications}
-              onRead={markNotificationRead}
+              onRead={markRead}
               emptyLabel="No notifications."
             />
           </TabsContent>

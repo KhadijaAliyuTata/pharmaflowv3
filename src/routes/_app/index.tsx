@@ -63,6 +63,7 @@ import { dashboardSnapshot, reorderSuggestions } from '~/domain/selectors';
 import { useMedicines } from '~/hooks/use-medicines';
 import { useIsOwner } from '~/hooks/use-is-owner';
 import { useSales } from '~/hooks/use-sales';
+import { useNotifications } from '~/hooks/use-notifications';
 import { useCurrentUser, usePharmacy, usePharmacyState } from '~/store/pharmacy';
 
 export const Route = createFileRoute('/_app/')({
@@ -111,8 +112,17 @@ function Dashboard() {
     () => dashboardSnapshot(storeSnapshot, medicines),
     [storeSnapshot, medicines],
   );
-  const notifications = usePharmacy((state) =>
-    state.notifications.filter((n) => !n.read).slice(0, 4),
+  // Notifications from Supabase in live mode, the seeded alerts in demo mode.
+  // Empty and flagged while it loads or if it fails, never the prototype's list.
+  const {
+    notifications: allNotifications,
+    unreadCount,
+    loading: notificationsLoading,
+    error: notificationsError,
+  } = useNotifications();
+  const notifications = useMemo(
+    () => allNotifications.filter((n) => !n.read).slice(0, 4),
+    [allNotifications],
   );
   const creditAccounts = usePharmacy((state) => state.creditAccounts);
   const suppliers = usePharmacy((state) => state.suppliers);
@@ -735,9 +745,9 @@ function Dashboard() {
           <CardHeader className="pb-2">
             <SectionTitle
               action={
-                snapshot.unreadNotifications > 0 ? (
+                unreadCount > 0 ? (
                   <Button variant="ghost" size="sm" render={<Link to="/notifications" />}>
-                    {snapshot.unreadNotifications} unread
+                    {unreadCount} unread
                   </Button>
                 ) : undefined
               }
@@ -746,7 +756,15 @@ function Dashboard() {
             </SectionTitle>
           </CardHeader>
           <CardContent>
-            {notifications.length === 0 ? (
+            {notificationsError ? (
+              <p role="alert" className="py-6 text-center text-sm text-muted-foreground">
+                {notificationsError}
+              </p>
+            ) : notificationsLoading && notifications.length === 0 ? (
+              <p className="py-6 text-center text-sm text-muted-foreground">
+                Loading notifications…
+              </p>
+            ) : notifications.length === 0 ? (
               <p className="py-6 text-center text-sm text-muted-foreground">
                 You are all caught up.
               </p>
