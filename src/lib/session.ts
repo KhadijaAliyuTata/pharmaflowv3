@@ -360,8 +360,8 @@ export function isOfflineSession(): boolean {
 /**
  * `code` distinguishes the failures a caller can act on differently from a plain
  * wrong password. `signUpWithInvitation` needs it: "you already have an account"
- * means "sign in instead", and "confirm your email first" means "go and check
- * your inbox", and neither should be rendered as a generic failure.
+ * means "sign in instead", and "this invitation was withdrawn" means "ask your
+ * owner for a new one", and neither should be rendered as a generic failure.
  */
 export type AuthResult =
   | { ok: true; user: User }
@@ -457,27 +457,35 @@ export async function signIn(
 /**
  * Create an account from an invitation, then attach it to a branch.
  *
- * ## Why this exists rather than an admin-created user
+ * ## Why this asks the server instead of calling `signUp` here
  *
- * Creating an auth user normally means `supabase.auth.admin.createUser`, which
- * needs the `service_role` key. That key must never reach a browser bundle. So a
- * new staff member signs themselves up here and sets their own password — this
- * function never receives it, never stores it, and never sees it again.
+ * `supabase.auth.signUp` was the original approach and it dead-ended. On a
+ * deployment with email confirmation required, `signUp` returns a user but **no
+ * session**, and then waits for a confirmation email sent by Supabase Auth. That
+ * email was the thing this whole change set out to remove, so `/join` stopped at
+ * "check your email" with an account created and no membership.
  *
- * The password goes straight from the form field to Supabase over TLS. It is not
- * logged, not put in the store, and not in any `Result` on the way back.
+ * `POST /api/accept-invite` creates the account with the address already confirmed,
+ * because the invitation email was delivered to that address and that is the proof
+ * — and it reads the address from the invitation row rather than from anything the
+ * browser sends. So this function sends `{ token, password }` and nothing else.
  *
- * ## The two outcomes that are not errors
+ * ## The password
  *
- * Supabase reports two things that look like failures but are not, and each needs
- * its own message because the next step differs:
+ * It goes from the form field, through this function, to the Worker's HTTPS endpoint,
+ * to Supabase. It is not logged, not put in the store, and not carried in any
+ * `Result` on the way back. The Worker holds it only for the duration of one
+ * `createUser` call.
  *
- *   * `data.session === null` with a user means the deployment requires email
- *     confirmation. The account exists but cannot redeem the invitation until the
- *     address is confirmed. Saying "check your email" is the only useful answer.
- *   * "User already registered" means someone already has an account at this
- *     address. That is not a dead end — they should sign in instead, and the
- *     redemption still works.
+ * ## The three outcomes that are not errors
+ *
+ *   * `already_registered` — someone already has an account at the invited address.
+ *     Not a dead end: they sign in with the password they have and redeem the same
+ *     code. Nothing is redeemed here either way.
+ *   * `profile_pending` — the membership exists, so the person has a place; only the
+ *     display cache is missing and sign-in will rebuild it.
+ *   * the invitation was already redeemed by an earlier successful attempt — sign in
+ *     and the membership is already there.
  */
 export async function signUpWithInvitation(
   email: string,
@@ -488,43 +496,83 @@ export async function signUpWithInvitation(
     return { ok: false, error: 'Sign-in is not configured on this deployment.' };
   }
 
-  const supabase = getSupabase();
+  // ---------------------------------------------------------------- accept
+  const accepted = await acceptInvitation(inviteToken, password);
 
-  const { data, error } = await supabase.auth.signUp({
-    email: email.trim(),
-    password,
-  });
-
-  if (error) {
-    // Already registered is a routing decision, not a wall.
-    if (/already registered|already been registered/i.test(error.message)) {
-      return { ok: false, error: 'ALREADY_REGISTERED', code: 'already_registered' };
+  if (!accepted.ok) {
+    // Already registered is a routing decision, not a wall: the caller offers
+    // sign-in instead. Every other code is a refusal with one correct next step.
+    //
+    // The typed address is compared against the one the invitation names. They are
+    // not negotiable — the account is created for the address the owner wrote on
+    // the invitation — so a mismatch has to be reported rather than silently
+    // resolved in either direction. Silently using the typed one would create an
+    // account the invitee never asked for; silently using the server's one would
+    // sign them into an account they cannot remember having made.
+    if (accepted.code === 'already_registered') {
+      const address = accepted.email || email.trim();
+      if (accepted.email && accepted.email.toLowerCase() !== email.trim().toLowerCase()) {
+        return {
+          ok: false,
+          error: `This invitation was sent to ${accepted.email}. Sign in with that address and your existing password.`,
+          code: 'already_registered',
+        };
+      }
+      return {
+        ok: false,
+        error: `You already have an account at ${address}. Sign in with your existing password to redeem this invitation.`,
+        code: 'already_registered',
+      };
     }
-    return { ok: false, error: humanise(error) };
+    return { ok: false, error: accepted.error, code: accepted.code };
   }
 
-  if (!data.user) {
-    return { ok: false, error: 'That account could not be created. Try again.' };
-  }
-
-  // No session means the deployment wants the address confirmed first. Redemption
-  // is impossible until then, so say so instead of failing later on the code.
-  if (!data.session) {
+  // Same check on the success path. The account now exists for the invitation's
+  // address; if that is not what was typed, signing in with the typed address would
+  // fail with a confusing "wrong password" message instead of naming the real cause.
+  if (accepted.email && accepted.email.toLowerCase() !== email.trim().toLowerCase()) {
     return {
       ok: false,
-      error:
-        'Check your email and confirm your address first. Your account is created, and the invitation is waiting for you.',
-      code: 'needs_confirmation',
+      error: `This invitation was sent to ${accepted.email}, not ${email.trim()}. Sign in with ${accepted.email} and the password you just chose.`,
+      code: 'address_mismatch',
     };
   }
 
-  // Signed in. Now the membership, which only `pf_redeem_invitation` may create.
-  const redeemed = await redeemInvitation(inviteToken);
-  if (!redeemed.ok) {
-    return { ok: false, error: redeemed.error, code: redeemed.code };
+  // ---------------------------------------------------------------- sign in
+  // The account exists and is confirmed, so this is an ordinary password sign-in
+  // with an ordinary session. Nothing about it is privileged, which is the point:
+  // the Worker created the account, it did not hand back a session.
+  const signedIn = await signIn(accepted.email, password);
+  if (!signedIn.ok) {
+    return signedIn;
   }
 
-  const user = await loadProfile(data.user.id, data.user.email ?? '');
+  // ---------------------------------------------------------------- redeem
+  // Now signed in as the invited address, so `pf_redeem_invitation` can verify the
+  // binding against the caller's own JWT. This is unchanged, and it remains the only
+  // thing that creates the membership.
+  //
+  // Ordering matters: the sign-in above happens BEFORE this, so a redemption failure
+  // leaves the person signed in rather than holding an account they cannot use. The
+  // caller turns `redeem_failed` into the redemption screen, and they get there
+  // without re-entering the password they just chose.
+  //
+  // `pf_redeem_invitation` ignores any reservation on the invitation, so the claim
+  // taken by `/api/accept-invite` never blocks this step.
+  const redeemed = await redeemInvitation(inviteToken);
+  if (!redeemed.ok) {
+    return { ok: false, error: redeemed.error, code: 'redeem_failed' };
+  }
+
+  // The profile row was written by the signup trigger and the branch was just set by
+  // redemption, so re-read it now that both exist.
+  const session = await getSupabase().auth.getSession();
+  const userId = session.data.session?.user.id;
+  if (!userId) {
+    return { ok: false, error: 'Your session expired. Sign in again to finish.', code: 'no_session' };
+  }
+
+  const user = await loadProfile(userId, accepted.email);
   if (!user) {
     // The membership exists, so the person does have a place; only the display
     // cache is missing. Sign-in will rebuild it.
@@ -541,6 +589,53 @@ export async function signUpWithInvitation(
   emit({ user, status: 'authenticated', offline: false });
 
   return { ok: true, user };
+}
+
+/**
+ * Ask the Worker to create a confirmed account for a live invitation.
+ *
+ * Deliberately not a Supabase call. Creating a confirmed user is
+ * `auth.admin.createUser`, which needs the service-role key, and that key must not
+ * exist in browser code — so it lives in the Worker environment and this sends only
+ * `{ token, password }`. The address is decided server-side from the invitation row;
+ * there is no field here for a caller to supply one.
+ */
+async function acceptInvitation(
+  token: string,
+  password: string,
+): Promise<
+  | { ok: true; email: string }
+  | { ok: false; error: string; code?: string; email?: string }
+> {
+  let response: Response;
+  try {
+    response = await fetch('/api/accept-invite', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, password }),
+    });
+  } catch {
+    // A network-level failure, not a refusal.
+    return { ok: false, error: 'Could not reach the server. Check your connection.' };
+  }
+
+  const payload = (await response.json().catch(() => null)) as
+    | { ok?: boolean; error?: string; code?: string; email?: string }
+    | null;
+
+  if (!response.ok || payload?.ok !== true) {
+    return {
+      ok: false,
+      error: payload?.error ?? `Could not create your account (HTTP ${response.status}).`,
+      code: payload?.code,
+      // Present on the `already_registered` refusal so the caller can name the
+      // address the invitation was issued to. Absent on every other refusal, which
+      // is deliberate: nothing about a withdrawn or expired code is echoed back.
+      email: payload?.code === 'already_registered' ? payload.email : undefined,
+    };
+  }
+
+  return { ok: true, email: payload.email ?? '' };
 }
 
 /**

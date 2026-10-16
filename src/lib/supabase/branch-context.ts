@@ -1,11 +1,11 @@
 import { useCallback, useSyncExternalStore } from 'react';
-import type { StaffRole } from '../db.types';
+import type { PharmacyStatus, StaffRole } from '../db.types';
 import { SEED_BRANCH } from '~/domain/seed';
 import type { Branch } from '~/domain/state';
 import { isDemoMode, refreshSessionProfile } from '~/lib/session';
 import { switchBranch, listAvailableBranches, type AvailableBranch } from './branches';
 import { fail, ok, type Result } from './result';
-import { isSupabaseConfigured } from './client';
+import { client, hasSession, isSupabaseConfigured } from './client';
 
 /**
  * The active branch.
@@ -267,6 +267,34 @@ export async function switchActiveBranch(branchId: string): Promise<Result<Activ
 }
 
 /* ------------------------------------------------------------------- reads */
+
+/**
+ * Is this session's own branch suspended?
+ *
+ * ## Why this needs asking at all
+ *
+ * Suspension works by making `pf_current_branch()` return NULL and by removing
+ * the branch from `pf_my_branches`. Both are correct - they deny the access - but
+ * from inside the app they look exactly like "this pharmacy has no data". A user
+ * whose counter was switched off by an operator would otherwise be shown an
+ * empty stock list with no explanation, and would reasonably conclude their
+ * records were gone.
+ *
+ * `pf_my_branch_status()` answers that one question. It takes no arguments, so it
+ * cannot be pointed at somebody else's pharmacy, and it returns one word.
+ *
+ * Returns `null` for: not configured, not signed in, no branch membership, or a
+ * query error. `null` is deliberately not `false`-with-a-reason: the caller cannot
+ * tell those apart, and none of them mean "suspended".
+ */
+export async function fetchMyBranchStatus(): Promise<PharmacyStatus | null> {
+  if (!isSupabaseConfigured()) return null;
+  if (!(await hasSession())) return null;
+
+  const { data, error } = await client().rpc('pf_my_branch_status');
+  if (error) return null;
+  return data ?? null;
+}
 
 /** The role this session holds at a given branch, or null if not permitted. */
 export function roleForBranch(branchId: string | null): StaffRole | null {

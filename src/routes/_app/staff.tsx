@@ -434,9 +434,14 @@ function isLastOwner(
 function InviteDialog({
   onInvite,
 }: {
-  onInvite: (email: string, role: StaffRole) => Promise<boolean>;
+  onInvite: (
+    email: string,
+    role: StaffRole,
+    fullName?: string,
+  ) => Promise<{ created: boolean; emailed: boolean }>;
 }) {
   const [email, setEmail] = useState('');
+  const [fullName, setFullName] = useState('');
   const [role, setRole] = useState<StaffRole>('assistant');
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -445,18 +450,27 @@ function InviteDialog({
   const submit = async () => {
     setBusy(true);
     setProblem(null);
-    const created = await onInvite(email.trim(), role);
+
+    const { created, emailed } = await onInvite(email.trim(), role, fullName.trim() || undefined);
+
     setBusy(false);
 
-    // Only close on a confirmed success, so a refusal leaves the typed address
-    // in the box rather than discarding it.
+    // The three outcomes, kept distinct. `notice` above the list carries the
+    // full message; the dialog only decides whether to keep the owner here.
+    //
+    // Closed when the invitation EXISTS, emailed or not — there is nothing to
+    // retry in this dialog, because retrying would create a second invitation
+    // and withdraw the first. A failed send is fixed by sharing the link, or by
+    // re-sending from the invitations list.
     if (created) {
       setEmail('');
+      setFullName('');
       setRole('assistant');
       setOpen(false);
-    } else {
-      setProblem('That invitation was not created. See the message above.');
+      return;
     }
+
+    setProblem('The invitation was not created. See the message above for the reason.');
   };
 
   return (
@@ -480,6 +494,20 @@ function InviteDialog({
 
         <div className="space-y-4">
           <div className="space-y-2">
+            <Label htmlFor="invite-name">Their name</Label>
+            <Input
+              id="invite-name"
+              autoComplete="off"
+              placeholder="e.g. Aisha Yusuf"
+              value={fullName}
+              onChange={(event) => setFullName(event.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              Used to address the invitation email. Optional.
+            </p>
+          </div>
+
+          <div className="space-y-2">
             <Label htmlFor="invite-email">Their email address</Label>
             <Input
               id="invite-email"
@@ -490,8 +518,7 @@ function InviteDialog({
               onChange={(event) => setEmail(event.target.value)}
             />
             <p className="text-xs text-muted-foreground">
-              The invitation only works for this exact address. Share the code privately —
-              anyone holding it still cannot use it under another address.
+              The invitation only works for this exact address, and we send it there.
             </p>
           </div>
 
@@ -517,7 +544,7 @@ function InviteDialog({
         <DialogFooter>
           <DialogClose render={<Button type="button" variant="outline" />}>Cancel</DialogClose>
           <Button type="button" onClick={() => void submit()} disabled={busy || !email.trim()}>
-            {busy ? 'Creating…' : 'Create invitation'}
+            {busy ? 'Creating and sending…' : 'Create and send invitation'}
           </Button>
         </DialogFooter>
       </DialogContent>

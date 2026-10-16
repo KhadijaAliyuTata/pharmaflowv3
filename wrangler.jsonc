@@ -15,7 +15,7 @@
 
   "observability": {
     "enabled": true
-  }
+  },
 
   // ---------------------------------------------------------------------------
   // Not wired yet. Uncomment and run the wrangler command once the account
@@ -45,4 +45,54 @@
   //   { binding = "HYPERDRIVE", id = "<paste>" }
   // ]
   // ---------------------------------------------------------------------------
+
+  // =========================================================================
+  // STAGING ENVIRONMENT
+  // =========================================================================
+  //
+  // Prepared, NOT deployed. Nothing here changes production: the top-level
+  // config above is untouched, and `wrangler deploy` with no `--env` ignores
+  // this block entirely.
+  //
+  // `name`, `main`, `compatibility_date` and `compatibility_flags` do NOT
+  // inherit into an environment in Wrangler, so they are repeated. Getting that
+  // wrong is the usual cause of "env staging behaves differently from
+  // production" surprises.
+  //
+  // Before deploying this, fill in the two pieces that are deliberately absent:
+  //
+  //   1. `vars` below. These are PUBLIC and land in the client bundle, so they
+  //      must be staging publishable values only - never the service-role key.
+  //
+  //      bun x vite build --mode staging      (reads .env.staging)
+  //
+  //   2. Secrets, which are NOT vars and must never be added as ones:
+  //
+  //      bunx wrangler secret put SUPABASE_SERVICE_ROLE_KEY --env staging
+  //      bunx wrangler secret put RESEND_API_KEY           --env staging
+  //      bunx wrangler secret put RESEND_FROM             --env staging
+  //      bunx wrangler secret put PUBLIC_APP_URL          --env staging
+  //
+  // `wrangler secret put` reads the value from stdin, so it does not land in
+  // shell history. Use `--env staging`, or you will write to production.
+  //
+  // Deploy, once approved:
+  //   bun x vite build --mode staging
+  //   bunx wrangler deploy -c dist/server/wrangler.json --env staging
+  //
+  "env": {
+    "staging": {
+      "name": "pharmaflow-staging",
+      "main": "@cloudflare/react-start/server-entry",
+      "compatibility_date": "2026-09-28",
+      "compatibility_flags": ["nodejs_compat"],
+      "observability": { "enabled": true }
+
+      // vars: {
+      //   PUBLIC_SUPABASE_URL: "https://<staging-ref>.supabase.co",
+      //   PUBLIC_SUPABASE_ANON_KEY: "",
+      //   PUBLIC_DEMO_MODE: "false"
+      // },
+    }
+  }
 }

@@ -3,6 +3,7 @@ import { Navigate, Outlet, createFileRoute, redirect, useNavigate } from '@tanst
 import { AppHeader } from '~/components/app-header';
 import { AppSidebar } from '~/components/app-sidebar';
 import { GlobalSearch } from '~/components/app/global-search';
+import { SuspendedBanner, SuspendedNotice, useMyBranchSuspended } from '~/components/app/suspended-banner';
 import { CommandMenu } from '~/components/command-menu';
 import { Button } from '~/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '~/components/ui/card';
@@ -54,6 +55,10 @@ function AppLayout() {
   // Two independent dialogs. Search finds records; the palette jumps to screens.
   // Neither shares state with the other or with the theme toggle.
   const [searchOpen, setSearchOpen] = useState(false);
+  // `null` until the database answers. A suspended pharmacy and a pharmacy with
+  // no membership both resolve to `no-branches`, so this is the only way to say
+  // which one the user is looking at.
+  const suspended = useMyBranchSuspended();
 
   // The server has no session, so it renders `loading` and this falls back to
   // `owner` — the same role the seeded store reports. Matching that on the
@@ -85,6 +90,13 @@ function AppLayout() {
   // effect after first paint, and blocking on it would blank the screen on every
   // load for a value the prototype already knows in demo mode.
   if (branch.status === 'no-branches' || branch.status === 'error') {
+    // Suspension is the one case here that is not the user's to fix, and the
+    // message that says "ask an owner to add you to a counter" would be actively
+    // misleading: an owner cannot add them to a counter that is withdrawn.
+    if (suspended === true) {
+      return <SuspendedNotice onRetry={() => void resolveActiveBranch()} />;
+    }
+
     return (
       <div className="flex min-h-dvh items-center justify-center p-6">
         <Card className="max-w-md">
@@ -132,6 +144,7 @@ function AppLayout() {
           onOpenCommand={() => setCommandOpen(true)}
         />
         <main className="flex-1 p-4 md:p-6">
+          <SuspendedBanner />
           <Outlet />
         </main>
       </SidebarInset>

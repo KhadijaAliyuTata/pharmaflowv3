@@ -32,6 +32,7 @@ export type Json = string | number | boolean | null | { [key: string]: Json | un
 
 export type StaffRole = 'owner' | 'assistant';
 export type PrescriptionClass = 'otc' | 'prescription' | 'controlled';
+export type PharmacyStatus = 'pending' | 'active' | 'suspended';
 export type StockState = 'in_stock' | 'low_stock' | 'out_of_stock' | 'expiring_soon' | 'expired';
 export type ReceiptState = 'pending_pricing' | 'confirmed';
 export type SaleState = 'paid' | 'part_paid' | 'credit' | 'refunded' | 'voided';
@@ -758,6 +759,14 @@ export type StaffInvitationRow = {
   token: string;
   invited_by: string;
   created_at: string;
+  /** The invited person, as the owner typed it. Display only — never an input to authorisation. */
+  full_name: string | null;
+  /** After this instant the code cannot be redeemed. */
+  expires_at: string | null;
+  /** When an acceptance attempt reserved this code. Never read by the browser. */
+  claimed_at: string | null;
+  /** When that reservation lapses and the code becomes claimable again. */
+  claim_expires_at: string | null;
   accepted_at: string | null;
   accepted_by: string | null;
   revoked_at: string | null;
@@ -857,6 +866,65 @@ export type Database = {
       pf_receipt_costs: View<ReceiptCostRow>;
       pf_sale_item_costs: View<SaleItemCostRow>;
       pf_my_branches: View<BranchRow>;
+/**
+       * Platform administration views, from 20261012140000_platform_admin.
+       *
+       * `security_invoker = false`, so each carries a `pf_is_platform_admin()`
+       * predicate in its own WHERE clause - that predicate, not the grant, is what
+       * makes them safe. They select no cost column, no customer identity and no
+       * audit `metadata`, deliberately.
+       */
+      pf_platform_pharmacies: View<{
+        id: string;
+        name: string;
+        status: PharmacyStatus;
+        address: string | null;
+        city: string | null;
+        state: string | null;
+        phone: string | null;
+        created_at: string;
+        activated_at: string | null;
+        suspended_at: string | null;
+        suspended_reason: string | null;
+        member_count: number;
+        owner_name: string | null;
+        owner_id: string | null;
+        owner_invitation_email: string | null;
+        owner_invited_at: string | null;
+        owner_accepted_at: string | null;
+        last_activity_at: string | null;
+        /**
+         * Last PRODUCT activity: a sale recorded, or stock received, moved,
+         * adjusted or disposed of. Null means the pharmacy never transacted.
+         *
+         * Distinct from `last_activity_at`, which is ADMINISTRATION activity
+         * (role changes, onboarding, status changes) and is NOT an adoption
+         * signal. Use this one for adoption.
+         */
+        last_business_activity_at: string | null;
+      }>;
+      pf_platform_orders: View<{
+        id: string;
+        branch_id: string;
+        pharmacy_name: string;
+        order_number: string;
+        state: string;
+        payment_state: string;
+        delivery_type: string;
+        created_at: string;
+        updated_at: string;
+        item_count: number;
+      }>;
+      pf_platform_activity: View<{
+        id: string;
+        branch_id: string;
+        pharmacy_name: string;
+        actor_id: string | null;
+        actor_name: string | null;
+        action: string;
+        description: string;
+        created_at: string;
+      }>;
     };
     /**
      * Only the scalar helpers are callable over PostgREST. The ten trigger
@@ -877,21 +945,108 @@ export type Database = {
       // are the ONLY way staff_invitations is written; the table itself holds a
       // SELECT grant and nothing else.
       pf_create_invitation: {
-        Args: { p_email: string; p_role?: StaffRole };
+        Args: { p_email: string; p_role?: StaffRole; p_full_name?: string | null; p_expires_in?: string };
         Returns: Pick<
           StaffInvitationRow,
-          'token' | 'email' | 'role' | 'created_at'
+          'token' | 'email' | 'role' | 'created_at' | 'expires_at' | 'full_name'
         >[];
       };
       pf_revoke_invitation: { Args: { p_token: string }; Returns: boolean };
+      /**
+       * Reserves a live invitation for one acceptance attempt.
+       *
+       * Returns no rows when the invitation is withdrawn, accepted, expired, or
+       * already held by a live lease. Reachable only by `service_role`; the browser
+       * never calls this.
+       */
+      pf_claim_invitation: {
+        Args: { p_token: string };
+        Returns: Pick<StaffInvitationRow, 'email' | 'claim_expires_at'>[];
+      };
       pf_redeem_invitation: {
         Args: { p_token: string };
         Returns: { branch: string; granted_role: StaffRole }[];
       };
+      /**
+       * Authoritative checkout, from 20261012120000_authoritative_checkout.
+       *
+       * The only thing the client may influence per line is *which* product,
+       * *which* of its units, and *how many*. The multiplier, the unit price,
+       * the base-unit total and every money figure are resolved server-side, so
+       * a caller that forges them changes nothing. Returns no cost-bearing
+       * value, which is what keeps purchase costs behind the owner-gated views.
+       */
+      pf_complete_sale: {
+        Args: {
+          p_lines: unknown;
+          p_payment_method: PaymentKind;
+          p_amount_paid: number;
+          p_discount?: number;
+          p_discount_reason?: string | null;
+          p_customer_id?: string | null;
+          p_credit_account_id?: string | null;
+          p_dispensed_against_prescription?: boolean;
+          p_idempotency_key?: string | null;
+        };
+        Returns: {
+          sale_id: string;
+          receipt_number: string;
+          total: number;
+          line_count: number;
+          already_completed: boolean;
+        }[];
+      };
+      /**
+       * Platform administration, from 20261012140000_platform_admin.
+       *
+       * Onboarding and suspension are `service_role` only - no browser can
+       * execute them - so the actor is an argument the Worker passes, not a JWT
+       * claim. That is safe because the function re-resolves the id against
+       * `profiles` rather than trusting it, and the caller was already verified
+       * upstream. Returning the invitation token is deliberate: it goes into the
+       * email inside the Worker and is never returned over the API.
+       */
+      pf_create_pharmacy: {
+        Args: {
+          p_actor: string;
+          p_pharmacy_name: string;
+          p_owner_name: string;
+          p_owner_email: string;
+          p_phone?: string;
+          p_address?: string;
+          p_city?: string;
+          p_state?: string;
+        };
+        Returns: {
+          branch_id: string;
+          pharmacy_name: string;
+          owner_invitation: string;
+          invitation_token: string;
+        }[];
+      };
+      pf_set_pharmacy_status: {
+        Args: {
+          p_actor: string;
+          p_branch_id: string;
+          p_status: PharmacyStatus;
+          p_reason?: string | null;
+        };
+        Returns: boolean;
+      };
+      /** True only for an account granted platform administration by service_role. */
+      pf_is_platform_admin: { Args: Record<PropertyKey, never>; Returns: boolean };
+      /**
+       * Status of the caller's own branch, including when it is suspended.
+       *
+       * Self-scoped: no arguments, so it cannot be pointed at another pharmacy.
+       * Exists only so the UI can say *why* an empty screen is empty.
+       */
+      pf_my_branch_status: { Args: Record<PropertyKey, never>; Returns: PharmacyStatus };
     };
     Enums: {
       staff_role: StaffRole;
       prescription_class: PrescriptionClass;
+      pharmacy_status: PharmacyStatus;
       stock_state: StockState;
       receipt_state: ReceiptState;
       sale_state: SaleState;

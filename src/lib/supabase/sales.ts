@@ -6,6 +6,7 @@ import type {
   SaleRow,
   SaleUpdate,
 } from '../db.types';
+import type { PaymentMethod } from '~/domain/types';
 import { client, hasSession, isSupabaseConfigured } from './client';
 import { fromList, ok, type Result } from './result';
 
@@ -196,6 +197,121 @@ export async function listSaleItemCosts(saleId?: string) {
   let query = client().from('pf_sale_item_costs').select('*');
   if (saleId) query = query.eq('sale_id', saleId);
   return fromList(await query);
+}
+
+/* -------------------------------------------------------- authoritative sale */
+
+/**
+ * One cart line as the server wants it.
+ *
+ * Deliberately three fields. The base-unit total, the unit multiplier and the
+ * price are all derived in `pf_complete_sale` from the product's own packaging,
+ * so a caller that sends them is ignored and a caller that forges them changes
+ * nothing.
+ */
+export interface CompleteSaleLine {
+  medicineId: string;
+  unitKey: string;
+  quantity: number;
+}
+
+export interface CompleteSaleInput {
+  lines: CompleteSaleLine[];
+  paymentMethod: PaymentMethod;
+  amountPaid: number;
+  discount?: number;
+  discountReason?: string;
+  customerId?: string;
+  creditAccountId?: string;
+  dispensedAgainstPrescription?: boolean;
+  /**
+   * A stable key for this attempt at this cart.
+   *
+   * The server returns the original sale rather than ringing up a second one if
+   * the same key arrives twice, which is what makes a double-click, a retry after
+   * a dropped connection, or a refresh mid-sale safe. Generate it once per cart
+   * and reuse it across retries; generate a new one for the next sale.
+   */
+  idempotencyKey: string;
+}
+
+export interface CompleteSaleResult {
+  saleId: string;
+  receiptNumber: string;
+  total: number;
+  lineCount: number;
+  /** True when this key had already been completed and nothing new was written. */
+  alreadyCompleted: boolean;
+}
+
+/**
+ * Ring up a sale through the database.
+ *
+ * ## Why this exists
+ *
+ * The POS used to call `ops.checkout`, which mutated `pharmaflow:state:v3` in
+ * localStorage and validated the cart against the seeded prototype catalogue.
+ * The catalogue it priced from comes from Postgres, so the ids never matched and
+ * a real sale could not complete.
+ *
+ * ## What the caller does not get to decide
+ *
+ * Branch, actor, unit multipliers, unit prices, base-unit totals, subtotal,
+ * total and outstanding are all resolved server-side. The function also refuses
+ * to proceed at all unless the caller is staff on the branch it resolves itself.
+ *
+ * No cost-bearing value is returned. `sale_items.cost_per_base_unit_snapshot`
+ * stays behind the owner-gated views, so this cannot become a way for an
+ * attendant to read purchase costs.
+ */
+export async function completeSale(input: CompleteSaleInput): Promise<Result<CompleteSaleResult>> {
+  if (!isSupabaseConfigured()) return { ok: false, error: OFFLINE };
+  if (!(await hasSession())) return { ok: false, error: NO_SESSION };
+
+  if (input.lines.length === 0) return { ok: false, error: 'Cart is empty' };
+
+  const { data, error } = await client().rpc('pf_complete_sale', {
+    p_lines: input.lines.map((line) => ({
+      medicine_id: line.medicineId,
+      unit_key: line.unitKey,
+      quantity: line.quantity,
+    })),
+    p_payment_method: input.paymentMethod,
+    p_amount_paid: input.amountPaid,
+    p_discount: input.discount ?? 0,
+    p_discount_reason: input.discountReason ?? null,
+    p_customer_id: input.customerId ?? null,
+    p_credit_account_id: input.creditAccountId ?? null,
+    p_dispensed_against_prescription: input.dispensedAgainstPrescription ?? false,
+    p_idempotency_key: input.idempotencyKey,
+  });
+
+  // PostgREST surfaces a raised `raise exception` as 400 with the message in
+  // `message`. It is a sentence written for an attendant, so it is passed
+  // through rather than replaced with a generic failure.
+  if (error) return { ok: false, error: error.message, code: error.code };
+
+  const row = (Array.isArray(data) ? data[0] : data) as
+    | {
+        sale_id?: string;
+        receipt_number?: string;
+        total?: number;
+        line_count?: number;
+        already_completed?: boolean;
+      }
+    | null;
+
+  if (!row?.sale_id || !row.receipt_number) {
+    return { ok: false, error: 'The sale was not completed.' };
+  }
+
+  return ok({
+    saleId: row.sale_id,
+    receiptNumber: row.receipt_number,
+    total: Number(row.total ?? 0),
+    lineCount: Number(row.line_count ?? 0),
+    alreadyCompleted: row.already_completed === true,
+  });
 }
 
 /* ---------------------------------------------------------- credit ledger */

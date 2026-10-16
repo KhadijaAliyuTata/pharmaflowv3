@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Medicine } from '~/domain/types';
 import { listMedicines } from '~/lib/supabase/catalog';
 import { useActiveBranch } from '~/lib/supabase/branch-context';
@@ -55,6 +55,14 @@ export interface MedicinesState {
   error: string | null;
   source: MedicinesSource;
   branchId: string | null;
+  /**
+   * Re-reads the catalogue from the server.
+   *
+   * Needed after a write that the server performed: a completed sale deducts
+   * stock in Postgres, and the till's own copy is now stale. Without this, the
+   * same box would still look available on the next scan.
+   */
+  refresh: () => void;
 }
 
 export function useMedicines(): MedicinesState {
@@ -72,6 +80,11 @@ export function useMedicines(): MedicinesState {
   // Guards against a slow response for a branch the user has since left
   // overwriting the list for the branch they are actually on.
   const inFlight = useRef<string | null>(null);
+  // Bumped by `refresh()`. In the effect's dependencies so a post-write re-read
+  // actually happens, rather than the hook returning the copy it already has.
+  const [reloadToken, setReloadToken] = useState(0);
+
+  const refresh = useCallback(() => setReloadToken((n) => n + 1), []);
 
   const demo = isDemoMode();
 
@@ -112,7 +125,7 @@ export function useMedicines(): MedicinesState {
     return () => {
       cancelled = true;
     };
-  }, [useRemote, currentBranchId]);
+  }, [useRemote, currentBranchId, reloadToken]);
 
   return useMemo(() => {
     // ---- demo / no backend. The seed catalogue is the product here. -------------
@@ -123,6 +136,7 @@ export function useMedicines(): MedicinesState {
         error: null,
         source: 'demo' as const,
         branchId: null,
+        refresh,
       };
     }
 
@@ -136,6 +150,7 @@ export function useMedicines(): MedicinesState {
         error: branchError ?? 'The product catalogue could not be loaded.',
         source: 'supabase' as const,
         branchId: null,
+        refresh,
       };
     }
 
@@ -146,6 +161,7 @@ export function useMedicines(): MedicinesState {
         error,
         source: 'supabase' as const,
         branchId: currentBranchId,
+        refresh,
       };
     }
 
@@ -156,6 +172,7 @@ export function useMedicines(): MedicinesState {
       error: null,
       source: 'supabase' as const,
       branchId: currentBranchId,
+      refresh,
     };
   }, [
     demo,
@@ -167,5 +184,6 @@ export function useMedicines(): MedicinesState {
     error,
     status,
     branchError,
+    refresh,
   ]);
 }

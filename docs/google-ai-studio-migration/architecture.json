@@ -1,0 +1,156 @@
+{
+  "$comment": "Machine-readable architecture inventory for Google AI Studio migration. Paths and configuration NAMES only — never secret values.",
+  "generatedFor": "google-ai-studio-migration",
+  "repository": {
+    "name": "pharmaflowv3",
+    "branch": "main",
+    "head": "922da67",
+    "remote": "https://github.com/KhadijaAliyuTata/pharmaflowv3.git",
+    "aheadOfOriginMain": 1,
+    "behindOriginMain": 0,
+    "staged": 0,
+    "modified": 15,
+    "untracked": 15,
+    "deleted": 0
+  },
+  "stack": {
+    "packageManager": "bun",
+    "lockfile": "bun.lock",
+    "language": "typescript",
+    "typescriptVersion": "~5.9.0",
+    "strict": true,
+    "runtime": ["browser", "cloudflare-workers", "supabase-postgres"],
+    "frameworks": {
+      "react": "19.3.0",
+      "tanstack-start": "^1.168.59",
+      "tanstack-router": "^1.170.40",
+      "vite": "^8.3.1",
+      "tailwindcss": "^4.3.3",
+      "supabase-js": "2.117.1",
+      "cloudflare-vite-plugin": "^1.61.0",
+      "wrangler": "^4.142.0",
+      "recharts": "3.8.0",
+      "zod": "^4.6.5"
+    }
+  },
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "verify:db": "bun run supabase/verify/run-all.mjs",
+    "check": "bun run typecheck && bun run build",
+    "deploy": "bun run build && wrangler deploy -c dist/server/wrangler.json",
+    "cf-typegen": "wrangler types"
+  },
+  "build": {
+    "clientOutDir": "dist/client",
+    "serverOutDir": "dist/server",
+    "deployableConfig": "dist/server/wrangler.json",
+    "envPrefix": ["VITE_", "PUBLIC_"],
+    "define": { "__DEV_SERVER__": "command === 'serve'" },
+    "pluginOrder": ["cloudflare", "tanstackStart", "react", "tailwindcss"],
+    "aliases": { "cn": "src/lib/cn.ts", "~": "src/" },
+    "generatedGitignored": ["src/routeTree.gen.ts", "worker-configuration.d.ts"]
+  },
+  "cloudflare": {
+    "workerName": "pharmaflow",
+    "compatibilityDate": "2026-09-28",
+    "compatibilityFlags": ["nodejs_compat"],
+    "main": "@tanstack/react-start/server-entry",
+    "observability": true,
+    "routesConfiguredInFile": false,
+    "customDomain": { "value": null, "status": "unverified", "note": "not in wrangler.jsonc; previously resolved to an unrelated site" },
+    "activeVars": [],
+    "d1Bindings": [],
+    "hyperdriveBindings": [],
+    "secretBindings": ["RESEND_API_KEY", "RESEND_FROM", "SUPABASE_SERVICE_ROLE_KEY", "GEMINI_API_KEY"]
+  },
+  "environmentVariables": {
+    "public": [
+      { "name": "PUBLIC_SUPABASE_URL", "purpose": "Supabase project URL", "configuredLocally": true },
+      { "name": "PUBLIC_SUPABASE_ANON_KEY", "purpose": "Supabase anon/publishable key; RLS-protected", "configuredLocally": true },
+      { "name": "PUBLIC_DEMO_MODE", "purpose": "Demo gate input; must be false for real data", "configuredLocally": true, "valueVerified": false },
+      { "name": "PUBLIC_APP_URL", "purpose": "Base address for invitation join links", "configuredLocally": true, "valueVerified": false, "alsoWorkerSecret": true }
+    ],
+    "serverOnly": [
+      { "name": "SUPABASE_SERVICE_ROLE_KEY", "purpose": "Create confirmed auth user on invitation acceptance", "readBy": "src/routes/api.accept-invite.ts", "bundledInClient": false },
+      { "name": "RESEND_API_KEY", "purpose": "Invitation email delivery", "readBy": "src/routes/api.send-invite.ts", "bundledInClient": false },
+      { "name": "RESEND_FROM", "purpose": "Verified sender address", "readBy": "src/routes/api.send-invite.ts", "bundledInClient": false },
+      { "name": "GEMINI_API_KEY", "purpose": "Gemini proxy: NAFDAC, chat, prescription OCR", "readBy": "src/routes/api/gemini.ts", "bundledInClient": false, "configuredLocally": false }
+    ]
+  },
+  "routes": {
+    "public": ["/login", "/join"],
+    "staff": ["/", "/pos", "/inventory", "/stock-receiving", "/stock-value", "/expiry", "/pricing", "/stock-intelligence", "/demand-radar", "/medicine-info", "/sales", "/reports", "/orders", "/customers", "/credit-accounts", "/suppliers", "/staff", "/notifications", "/settings"],
+    "customerPortal": ["/portal", "/portal/search", "/portal/orders", "/portal/reminders", "/portal/profile"],
+    "serverHandlers": [
+      { "path": "/api/send-invite", "file": "src/routes/api.send-invite.ts", "tier": "worker" },
+      { "path": "/api/accept-invite", "file": "src/routes/api.accept-invite.ts", "tier": "worker", "usesServiceRole": true },
+      { "path": "/api/gemini", "file": "src/routes/api/gemini.ts", "tier": "worker", "model": "gemini-2.5-flash" },
+      { "path": "/api/health", "file": "src/routes/api.health.ts", "tier": "worker" }
+    ]
+  },
+  "dataSources": {
+    "supabase": [
+      { "hook": "use-medicines", "path": "src/hooks/use-medicines.ts", "subject": "catalogue and batches", "localFallbackInLiveMode": false },
+      { "hook": "use-suppliers", "path": "src/hooks/use-suppliers.ts", "subject": "suppliers", "localFallbackInLiveMode": true },
+      { "hook": "use-staff", "path": "src/hooks/use-staff.ts", "subject": "staff roster" },
+      { "hook": "use-is-owner", "path": "src/hooks/use-is-owner.ts", "subject": "role authority via pf_is_owner()" }
+    ],
+    "localStorage": {
+      "key": "pharmaflow:state:v3",
+      "store": "src/store/pharmacy.ts",
+      "collections": ["sales", "customers", "creditAccounts", "customerOrders", "medicineRequests", "stockReceipts", "notifications", "auditEvents", "medicines(prototype)"],
+      "note": "Only checkout has been moved to an authoritative database operation."
+    }
+  },
+  "authoritativeOperations": {
+    "pf_complete_sale": {
+      "migration": "supabase/migrations/20261012120000_authoritative_checkout.sql",
+      "appliedToRealDatabase": false,
+      "securityDefiner": true,
+      "pinnedSearchPath": true,
+      "executableBy": ["authenticated"],
+      "revokedFrom": ["public", "anon"],
+      "clientDerivesOnServer": ["unit_multiplier", "unit_price", "base_units_total", "subtotal", "total", "outstanding", "branch", "actor"],
+      "returnsCostData": false
+    },
+    "pf_redeem_invitation": { "soleMembershipWriter": true },
+    "pf_claim_invitation": { "executableBy": ["service_role"] }
+  },
+  "database": {
+    "migrations": 15,
+    "verifySuites": 17,
+    "unitTestRunner": false,
+    "hasUnappliedMigrations": true,
+    "tablesOfNote": ["medicines", "medicine_batches", "sales", "sale_items", "stock_movements", "stock_receipts", "profiles", "branch_memberships", "branches", "staff_invitations", "customers", "credit_accounts", "credit_ledger", "customer_orders", "audit_events"],
+    "isolationFunctions": ["pf_current_branch", "pf_current_role", "pf_is_owner", "pf_is_staff", "pf_is_customer", "pf_set_active_branch"],
+    "withheldColumns": ["medicines.cost_per_base_unit", "medicine_batches.cost_per_base_unit", "sale_items.cost_per_base_unit_snapshot"],
+    "ownerGatedViews": ["pf_medicine_costs", "pf_batch_costs", "pf_sale_item_costs"]
+  },
+  "dashboardIntegration": {
+    "aiStudioExportLocated": false,
+    "searchedLocations": ["Downloads", "Desktop", "Default Project workspace", "%TEMP%"],
+    "chartDependencyAlreadyPresent": "recharts@3.8.0",
+    "existingChartInfrastructure": ["src/components/ui/chart.tsx", "src/components/chart-area-interactive.tsx", "src/components/app/primitives.tsx", "src/components/section-cards.tsx"],
+    "tabsNeedingRealDataFirst": ["Orders", "Activity", "Overview(sales/revenue portion)"],
+    "mustNotChange": ["vite.config.ts", "wrangler.jsonc", "supabase/migrations/**", "supabase/verify/**", "src/lib/session.ts", "src/lib/supabase.ts", "src/domain/units.ts", "src/domain/operations.ts", "src/routes/login.tsx"]
+  },
+  "googleAiStudioCompatibility": {
+    "primaryRisk": "vite.config.ts places cloudflare({ viteEnvironment: { name: 'ssr' } }) first; without a workerd-compatible runtime the ssr environment and all src/routes/api handlers are unavailable.",
+    "bunLockfileSupported": "unverified",
+    "workerSecretsSupported": false,
+    "supabaseConnectivity": "expected-ok",
+    "demoGateInBuildMode": "folds to false; fails closed rather than running seed data",
+    "recommendation": "Use AI Studio for editing and client-side preview only. Keep Cloudflare as the production target. Run server routes via bun run dev or the deployed Worker."
+  },
+  "securityFindings": {
+    "sbSecretStringInBundle": { "classification": "false-positive", "reason": "supabase-js key-format classifier; all 16 sb_* tokens in dist have zero-length suffix; 0 tokens with suffix >= 20 chars" },
+    "serviceRoleKeyInClientBundle": { "occurrences": 0 },
+    "voidRestoresStock": false,
+    "rateLimitingOnAcceptInvite": false,
+    "refundSaleImplemented": false,
+    "realConcurrencyTested": false,
+    "browserTested": false
+  }
+}

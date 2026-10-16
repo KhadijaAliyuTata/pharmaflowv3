@@ -36,7 +36,7 @@ const NO_SESSION = 'Not signed in';
  * already scoped to the caller's branch by RLS, and the inviter is always the
  * current owner, so neither tells this screen anything it does not already know.
  */
-const INVITATION_COLUMNS = 'id,email,role,token,created_at,accepted_at,revoked_at';
+const INVITATION_COLUMNS = 'id,email,role,token,created_at,expires_at,full_name,accepted_at,revoked_at';
 
 /**
  * `profiles` carries no email column, and `auth.users` is not readable through
@@ -64,12 +64,22 @@ export type StaffInvitation = {
   role: StaffRole;
   token: string;
   createdAt: string;
+  expiresAt: string | null;
+  fullName: string | null;
   status: 'pending' | 'accepted' | 'revoked';
 };
 
 type InvitationSelect = Pick<
   StaffInvitationRow,
-  'id' | 'email' | 'role' | 'token' | 'created_at' | 'accepted_at' | 'revoked_at'
+  | 'id'
+  | 'email'
+  | 'role'
+  | 'token'
+  | 'created_at'
+  | 'expires_at'
+  | 'full_name'
+  | 'accepted_at'
+  | 'revoked_at'
 >;
 
 function mapInvitation(row: InvitationSelect): StaffInvitation {
@@ -79,6 +89,8 @@ function mapInvitation(row: InvitationSelect): StaffInvitation {
     role: row.role,
     token: row.token,
     createdAt: row.created_at,
+    expiresAt: row.expires_at,
+    fullName: row.full_name,
     status: row.revoked_at ? 'revoked' : row.accepted_at ? 'accepted' : 'pending',
   };
 }
@@ -165,6 +177,7 @@ export async function listInvitations(): Promise<Result<StaffInvitation[]>> {
 export async function issueInvitation(
   email: string,
   role: StaffRole = 'assistant',
+  fullName?: string,
 ): Promise<Result<StaffInvitation>> {
   if (!isSupabaseConfigured()) return { ok: false, error: OFFLINE };
   if (!(await hasSession())) return { ok: false, error: NO_SESSION };
@@ -172,11 +185,15 @@ export async function issueInvitation(
   const { data, error } = await client().rpc('pf_create_invitation', {
     p_email: email,
     p_role: role,
+    // Sent as null rather than an empty string when the owner typed nothing, so
+    // the database stores NULL and the email says "a member of staff" instead of
+    // greeting a nameless colleague with a blank.
+    p_full_name: fullName?.trim() ? fullName.trim() : null,
   });
 
   if (error) return fail(error.message, error.code);
 
-  const row = (data as StaffInvitationRow[] | null)?.[0];
+  const row = (data as InvitationSelect[] | null)?.[0];
   if (!row) return fail('The invitation was not created');
 
   return ok(mapInvitation(row));
@@ -192,6 +209,56 @@ export async function revokeInvitation(token: string): Promise<Result<boolean>> 
   if (error) return fail(error.message, error.code);
 
   return ok(data === true);
+}
+
+/**
+ * Ask the server route to email an invitation.
+ *
+ * Deliberately not a Supabase call. Sending needs the Resend API key, which must
+ * not exist in browser code, so the request goes to the Worker's own
+ * `/api/send-invite` handler with this session's access token. That handler
+ * re-checks the owner with `pf_is_owner()`, reads the recipient from the
+ * invitation row rather than from anything passed here, and returns whatever
+ * Resend actually said.
+ *
+ * `token` is the only thing sent. No address is transmitted, because the server
+ * derives it — which is also what stops this endpoint from being used to mail
+ * arbitrary people.
+ */
+export async function sendInvitationEmail(token: string): Promise<Result<{ to: string }>> {
+  if (!isSupabaseConfigured()) return { ok: false, error: OFFLINE };
+
+  const session = await client().auth.getSession();
+  const accessToken = session.data.session?.access_token;
+  if (!accessToken) return { ok: false, error: NO_SESSION };
+
+  let response: Response;
+  try {
+    response = await fetch('/api/send-invite', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({ token }),
+    });
+  } catch {
+    // A network-level failure, not a refusal. Saying "no connection" is more
+    // useful than claiming the email was sent.
+    return { ok: false, error: 'Could not reach the mail service. Check your connection.' };
+  }
+
+  const payload = (await response.json().catch(() => null)) as
+    | { ok?: boolean; error?: string; to?: string }
+    | null;
+
+  if (!response.ok || payload?.ok !== true) {
+    // The server's own message, which distinguishes a refusal (401/403/409) from
+    // a misconfiguration (503) from Resend itself failing (502).
+    return fail(payload?.error ?? `Could not send the invitation (HTTP ${response.status}).`);
+  }
+
+  return ok({ to: payload.to ?? '' });
 }
 
 /**

@@ -73,6 +73,7 @@ export {
 } from './catalog';
 
 export {
+  completeSale,
   createSale,
   getSale,
   listCreditAccounts,
@@ -81,6 +82,12 @@ export {
   listSales,
   recordCreditPayment,
   voidSale,
+} from './sales';
+
+export type {
+  CompleteSaleInput,
+  CompleteSaleLine,
+  CompleteSaleResult,
 } from './sales';
 
 export {

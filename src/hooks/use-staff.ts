@@ -6,6 +6,7 @@ import {
   listStaff,
   redeemInvitation as repoRedeemInvitation,
   removeStaffMember,
+  sendInvitationEmail as repoSendInvitationEmail,
   revokeInvitation,
   type StaffInvitation,
   type StaffMember,
@@ -54,7 +55,15 @@ export interface StaffState {
   source: StaffSource;
   /** False in demo mode, and false whenever the session is not an owner. */
   canManage: boolean;
-  invite: (email: string, role: StaffRole) => Promise<boolean>;
+  /**
+   * Two independent outcomes, so the caller cannot collapse "the invitation was
+   * created" into "everything worked". `notice` always describes which happened.
+   */
+  invite: (
+    email: string,
+    role: StaffRole,
+    fullName?: string,
+  ) => Promise<{ created: boolean; emailed: boolean }>;
   revoke: (token: string) => Promise<boolean>;
   remove: (userId: string, name: string) => Promise<boolean>;
   refresh: () => Promise<void>;
@@ -142,14 +151,54 @@ export function useStaff(isOwner: boolean): StaffState {
     [live, load],
   );
 
+  /**
+   * Create the invitation, then try to email it.
+   *
+   * Two steps, deliberately not one, because they fail independently and the
+   * owner has to be able to tell which happened:
+   *
+   *   1. The invitation fails  -> nothing was created; `run` reports why.
+   *   2. The email fails       -> the invitation EXISTS and is usable. This is
+   *      the case that used to be indistinguishable from success, because the
+   *      message fired the instant the row was saved.
+   *
+   * So the invitation is created first and the send is attempted second, and the
+   * message names which one happened. Nothing here reports that an email was
+   * sent unless the server confirmed Resend accepted it.
+   */
   const invite = useCallback(
-    async (email: string, role: StaffRole) => {
-      return run(
-        async () => repoIssueInvitation(email, role),
-        `Invitation created for ${email}. Share the code with them.`,
-      );
+    async (email: string, role: StaffRole, fullName?: string) => {
+      setNotice(null);
+
+      if (!live) {
+        setNotice(DEMO_REFUSAL);
+        return { created: false, emailed: false };
+      }
+
+      const created = await repoIssueInvitation(email, role, fullName);
+      if (!created.ok) {
+        setNotice(created.error);
+        return { created: false, emailed: false };
+      }
+
+      // Re-read so the invitations list shows the new row either way.
+      await load();
+
+      const sent = await repoSendInvitationEmail(created.data.token);
+      if (!sent.ok) {
+        // The invitation is real and working. Say so, and say the email did not
+        // go, rather than implying it did — the code and link are still usable.
+        setNotice(
+          `Invitation created for ${email}, but the email was not sent: ${sent.error} ` +
+            `The code and link below still work — share them manually.`,
+        );
+        return { created: true, emailed: false };
+      }
+
+      setNotice(`Invitation created and emailed to ${email}.`);
+      return { created: true, emailed: true };
     },
-    [run],
+    [live, load],
   );
 
   const revoke = useCallback(
