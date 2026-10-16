@@ -12,6 +12,8 @@ import { Input } from '~/components/ui/input';
 import { Kbd } from '~/components/ui/kbd';
 import { CATEGORY_LABEL, globalSearch, type SearchCategory, type SearchResult } from '~/domain/search';
 import { useMedicines } from '~/hooks/use-medicines';
+import { useSuppliers } from '~/hooks/use-suppliers';
+import { useCustomers } from '~/hooks/use-customers';
 import { usePharmacy } from '~/store/pharmacy';
 
 /**
@@ -66,13 +68,15 @@ export function GlobalSearch({
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Only the four collections search actually reads, each as its own selector
-  // call. Selecting the whole state would re-render this on every stock tick in
-  // the app, which is the exact problem the store's per-slice design avoids.
+  // Only the four collections search actually reads. Medicines, suppliers and
+  // customers come from their live hooks; the branch's staff directory still
+  // comes from the store, which `~/lib/tenant-sync` keeps current. Selecting the
+  // whole state would re-render this on every stock tick in the app, which is
+  // the exact problem the store's per-slice design avoids.
   const { medicines } = useMedicines();
-  const suppliers = usePharmacy((s) => s.suppliers);
+  const { suppliers } = useSuppliers();
   const users = usePharmacy((s) => s.users);
-  const customers = usePharmacy((s) => s.customers);
+  const { customers } = useCustomers();
 
   const results = useMemo(
     () => globalSearch({ medicines, suppliers, users, customers }, query),

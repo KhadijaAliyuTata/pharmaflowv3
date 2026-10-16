@@ -55,6 +55,7 @@ import {
   summariseSales,
 } from '~/domain/selectors';
 import { useMedicines } from '~/hooks/use-medicines';
+import { useCustomers } from '~/hooks/use-customers';
 import { usePharmacy, usePharmacyActions } from '~/store/pharmacy';
 import type { CartLine, Medicine, PaymentMethod, TradeUnit } from '~/domain/types';
 
@@ -1075,7 +1076,10 @@ function CustomerSelect({
   onChange: (value: string) => void;
   disabled?: boolean;
 }) {
-  const customers = usePharmacy((state) => state.customers);
+  // Live in live mode; the seed list in demo mode. Safe here because the
+  // checkout passes `customerId` to the server RPC, which resolves the customer
+  // itself — the picker only has to name the rows.
+  const { customers } = useCustomers();
 
   return (
     <Select value={value} onValueChange={(next) => onChange(next ?? NO_ACCOUNT)}>

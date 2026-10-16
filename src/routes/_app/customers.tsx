@@ -36,9 +36,10 @@ import {
 } from '~/components/app/primitives';
 import { formatRelative, formatWhen, sum } from '~/domain/money';
 import type { Customer, Medicine } from '~/domain/types';
-import { useCurrentUser, usePharmacy } from '~/store/pharmacy';
 import { useSeedQuery } from '~/lib/use-seed-query';
 import { useMedicines } from '~/hooks/use-medicines';
+import { useCustomers } from '~/hooks/use-customers';
+import { useSales } from '~/hooks/use-sales';
 import { useIsOwner } from '~/hooks/use-is-owner';
 
 export const Route = createFileRoute('/_app/customers')({
@@ -93,8 +94,11 @@ function compare(a: Customer, b: Customer, key: SortKey): number {
 }
 
 function CustomersScreen() {
-  const customers = usePharmacy((state) => state.customers);
-  const sales = usePharmacy((state) => state.sales);
+  // Customers from Supabase in live mode. useCustomers has no local fallback
+  // there, so a loading or failed read is empty and flagged, not seed data.
+  const { customers, loading, error } = useCustomers();
+  // Purchase history draws on the same live ledger the /sales screen reads.
+  const { sales } = useSales();
   // Catalogue from Supabase in live mode; useMedicines has no local
   // fallback there, so a failed read surfaces as an error, not as seed data.
   const { medicines } = useMedicines();
@@ -205,7 +209,15 @@ function CustomersScreen() {
         </CardHeader>
 
         <CardContent>
-          {visible.length === 0 ? (
+          {error ? (
+            <p role="alert" className="py-8 text-center text-sm text-muted-foreground">
+              {error}
+            </p>
+          ) : loading && customers.length === 0 ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">
+              Loading customers…
+            </p>
+          ) : visible.length === 0 ? (
             <p className="py-8 text-center text-sm text-muted-foreground">
               No customer matches that search.
             </p>
