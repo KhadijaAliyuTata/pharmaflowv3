@@ -400,11 +400,38 @@ check(
   `accepted_by was ${settled?.accepted_by}`,
 );
 
+/*
+ * The same person, redeeming the same code again.
+ *
+ * This is a returning member: a reload, a second device, a retried flow. The
+ * invitation has already done its job, so redemption is idempotent — it returns
+ * the membership they already hold and writes nothing at all, rather than
+ * turning them away from a pharmacy they are already part of.
+ */
 const replay = await redeemInvite(db, NEWCOMER, ownToken, NEWCOMER_EMAIL);
 check(
-  'the same invitation cannot be redeemed twice',
-  !replay.ok,
-  replay.err ?? 'it was allowed',
+  'redeeming the same invitation again succeeds',
+  replay.ok,
+  replay.err ?? 'a returning member was turned away',
+);
+check(
+  '...and returns the membership they already had',
+  replay.value?.[0]?.branch === BRANCH_A && replay.value?.[0]?.granted_role === 'assistant',
+  JSON.stringify(replay.value?.[0]),
+);
+check(
+  '...without creating a second membership',
+  (await membershipsFor(db, NEWCOMER)).length === 1,
+  JSON.stringify(await membershipsFor(db, NEWCOMER)),
+);
+
+const settledAgain = (
+  await query(db, 'select accepted_at from staff_invitations where token = $1', [ownToken])
+)[0];
+check(
+  '...and the accepted row is not re-stamped',
+  String(settledAgain?.accepted_at) === String(settled?.accepted_at),
+  `accepted_at moved from ${settled?.accepted_at} to ${settledAgain?.accepted_at}`,
 );
 
 check(
@@ -489,16 +516,57 @@ check(
   'redeeming twice created a duplicate',
 );
 
+/*
+ * The same account, redeeming its own settled code again — the returning-member
+ * case once more, this time for an account that already existed before it was
+ * invited. Idempotent for them too: the membership they hold comes back and
+ * nothing is written.
+ */
+const returningReplay = await redeemInvite(db, RETURNING, returningToken, 'returning@example.test');
 check(
-  'the same invitation cannot then be redeemed by anyone else',
-  !(await redeemInvite(db, RETURNING, returningToken, 'returning@example.test')).ok,
-  'the code worked a second time',
+  'the settled code is idempotent for the account it was issued to',
+  returningReplay.ok,
+  returningReplay.err ?? 'the account was turned away from a membership it already holds',
+);
+check(
+  '...and it is still the only membership that account holds',
+  (await membershipsFor(db, RETURNING)).length === 1,
+  JSON.stringify(await membershipsFor(db, RETURNING)),
 );
 
+/*
+ * The address binding, kept intact.
+ *
+ * A code is bound to the address it was issued to, and that check runs before the
+ * idempotent path — so it applies to members of the branch as well as to
+ * strangers. Both callers below present a code issued to `returning@example.test`:
+ * `OUTSIDER` holds no membership anywhere, and `NEWCOMER` is already a member of
+ * `BRANCH_A`. Both must be refused on the binding rather than greeted with a
+ * membership that was never theirs.
+ */
+const OUTSIDER = 'cccccccc-0000-0000-0000-000000000010';
+await query(db, 'insert into auth.users (id, email) values ($1, $2)', [
+  OUTSIDER,
+  'outsider@example.test',
+]);
+
+const crossAddress = await redeemInvite(db, OUTSIDER, returningToken, 'outsider@example.test');
 check(
-  'nor by the account it was issued to, now that it is settled',
-  !(await redeemInvite(db, NEWCOMER, returningToken, 'returning@example.test')).ok,
-  'a settled code was reusable',
+  'a code cannot be redeemed by an account it was not issued to',
+  !crossAddress.ok && /different email/i.test(crossAddress.err ?? ''),
+  crossAddress.err ?? 'a code issued to another address was accepted',
+);
+check(
+  '...and the refused attempt created no membership',
+  (await membershipsFor(db, OUTSIDER)).length === 0,
+  'a refused redemption granted a place at the pharmacy',
+);
+
+const memberCrossAddress = await redeemInvite(db, NEWCOMER, returningToken, NEWCOMER_EMAIL);
+check(
+  'a member cannot redeem a code issued to another address either',
+  !memberCrossAddress.ok && /different email/i.test(memberCrossAddress.err ?? ''),
+  memberCrossAddress.err ?? 'a member redeemed a code issued to another address',
 );
 
 /* ------------------------------------------------------------------ claiming */

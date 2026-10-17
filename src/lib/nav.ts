@@ -29,6 +29,7 @@ import {
  * here still works.
  */
 import type { Role } from '~/domain/types';
+import { isDemoMode } from '~/lib/build-mode';
 
 export type { Role };
 
@@ -42,6 +43,16 @@ export type NavItem = {
   badge?: number;
   /** Words ⌘K should match beyond the label. */
   keywords?: string[];
+  /**
+   * Withheld from the sidebar and ⌘K in a live build.
+   *
+   * The route itself still exists and renders a `PilotNotice`, so a bookmark or
+   * a typed URL gets a sentence rather than a redirect — this flag only keeps the
+   * link out of navigation, where an entry that leads to "not part of this pilot"
+   * is worse than no entry at all. Ignored in demo mode, where the seeded screens
+   * behind these items do work.
+   */
+  pilotHidden?: true;
 };
 
 export type NavSection = {
@@ -96,12 +107,14 @@ export const NAV_SECTIONS: NavSection[] = [
         to: '/orders',
         icon: ClipboardList,
         keywords: ['orders', 'delivery', 'ecommerce'],
+        pilotHidden: true,
       },
       {
         label: 'Pricing',
         to: '/pricing',
         icon: CreditCard,
         keywords: ['price', 'cost', 'margin'],
+        pilotHidden: true,
       },
       {
         label: 'Expiry',
@@ -119,12 +132,14 @@ export const NAV_SECTIONS: NavSection[] = [
         to: '/stock-intelligence',
         icon: BarChart3,
         keywords: ['forecast', 'demand', 'analytics', 'reorder'],
+        pilotHidden: true,
       },
       {
         label: 'Demand Radar',
         to: '/demand-radar',
         icon: Radio,
         keywords: ['demand', 'request', 'unmet', 'restock', 'wanted'],
+        pilotHidden: true,
       },
       {
         label: 'Medicine Info',
@@ -149,6 +164,7 @@ export const NAV_SECTIONS: NavSection[] = [
         icon: CreditCard,
         roles: ['owner'],
         keywords: ['credit', 'debt', 'repayment', 'owe'],
+        pilotHidden: true,
       },
       {
         label: 'Suppliers',
@@ -181,6 +197,7 @@ export const NAV_SECTIONS: NavSection[] = [
         to: '/reports',
         icon: FileText,
         keywords: ['report', 'sales', 'export', 'profit', 'revenue', 'gross'],
+        pilotHidden: true,
       },
     ],
   },
@@ -215,10 +232,17 @@ export const HEADER_ICONS = {
 } as const;
 
 export function sectionsForRole(role: Role): NavSection[] {
+  // A live build hides the items whose screens are withheld (see `pilotHidden`);
+  // demo mode keeps them, because there the screens render. Sections left with no
+  // items are dropped so the sidebar does not print a heading over nothing.
+  const live = !isDemoMode();
+
   return NAV_SECTIONS.map((section) => ({
     ...section,
-    items: section.items.filter((item) => !item.roles || item.roles.includes(role)),
-  }));
+    items: section.items.filter(
+      (item) => (!item.roles || item.roles.includes(role)) && !(live && item.pilotHidden),
+    ),
+  })).filter((section) => section.items.length > 0);
 }
 
 /** Flat list for ⌘K, filtered the same way. */

@@ -56,6 +56,7 @@ import {
 } from '~/domain/selectors';
 import { useMedicines } from '~/hooks/use-medicines';
 import { useCustomers } from '~/hooks/use-customers';
+import { useSales } from '~/hooks/use-sales';
 import { usePharmacy, usePharmacyActions } from '~/store/pharmacy';
 import type { CartLine, Medicine, PaymentMethod, TradeUnit } from '~/domain/types';
 
@@ -102,7 +103,12 @@ function PointOfSale() {
   // as it always was. In live mode the sale is the database's to record.
   const live = !isDemoMode();
   const creditAccounts = usePharmacy((state) => state.creditAccounts);
-  const today = usePharmacy((state) => summariseSales(salesSince(state.sales, 24)));
+  // The ledger, in whichever mode has one. `useSales` reads Supabase in a live
+  // build and the seeded ledger in demo, so this is the same figure either way —
+  // but `state.sales` is empty live, which would pin "Taken today" at ₦0 however
+  // busy the till was.
+  const { sales, loading: salesLoading, error: salesError, refresh: refreshSales } = useSales();
+  const today = useMemo(() => summariseSales(salesSince(sales, 24)), [sales]);
   const { checkout } = usePharmacyActions();
 
   // The cart is a register session, not domain data. Persisting it would let a
@@ -501,6 +507,8 @@ function PointOfSale() {
       clearSale();
       // Stock moved on the server; this till's copy is stale until it re-reads.
       refreshMedicines();
+      // So did the ledger behind "Taken today".
+      refreshSales();
       setQuery('');
       searchRef.current?.focus();
     } finally {
@@ -995,7 +1003,7 @@ function PointOfSale() {
             </CardContent>
           </Card>
 
-          <TodayTile today={today} />
+          <TodayTile today={today} loading={salesLoading} error={salesError} />
         </div>
       </div>
 
@@ -1132,13 +1140,35 @@ function TotalRow({
   );
 }
 
-function TodayTile({ today }: { today: ReturnType<typeof summariseSales> }) {
+/**
+ * Today's takings, from the same ledger the Sales screen reads.
+ *
+ * `state.sales` is empty in a live build, so reading the store here pinned this
+ * tile at ₦0 however busy the till was. It reads `useSales()` instead — the live
+ * ledger in a live build, the seeded one in demo — and the caller re-reads after
+ * a completed sale.
+ *
+ * `loading` covers the first read, so the tile shows a skeleton rather than a
+ * confident ₦0, and a failed read says so instead of reporting a false zero. The
+ * hook pages the ledger, so the sum covers the most recent page — the same bound
+ * the Sales screen has.
+ */
+function TodayTile({
+  today,
+  loading,
+  error,
+}: {
+  today: ReturnType<typeof summariseSales>;
+  loading?: boolean;
+  error?: string | null;
+}) {
   return (
     <StatTile
       label="Taken today"
-      value={<Money value={today.net} compact />}
-      hint={`${today.count} sales`}
+      value={error ? '—' : <Money value={today.net} compact />}
+      hint={error ? 'Ledger unavailable' : `${today.count} sales`}
       icon={<Banknote className="size-4" />}
+      loading={loading}
     />
   );
 }

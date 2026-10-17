@@ -370,7 +370,7 @@ section('6. an owner cannot invite staff into another pharmacy');
 
 /* ================================ 7/8. invitation lifecycle and single use */
 
-section('7/8. an invitation is single-use, and rejects the wrong identity');
+section('7/8. an invitation grants one membership, and rejects the wrong identity');
 
 {
   const [invitee] = await query(
@@ -409,18 +409,37 @@ section('7/8. an invitation is single-use, and rejects the wrong identity');
   const [status] = await query(database, `select status from branches where id = $1`, [created.branch_id]);
   check('the pharmacy activated on acceptance', status?.status === 'active', String(status?.status));
 
+  /*
+   * The same person, redeeming the same code again.
+   *
+   * Redemption is idempotent: the invitation has already done its job, so the
+   * second call returns the membership they already hold and writes nothing,
+   * rather than raising. A returning owner who re-opens the emailed link must not
+   * be told they have no place at a pharmacy they already own.
+   */
   const second = await asAuthenticated(database, () =>
     asActor(database, INVITEE, async () => {
       await database.query(`select set_actor_email('beta-owner@example.test')`);
       try {
-        await database.query(`select * from public.pf_redeem_invitation($1)`, [token[0].token]);
-        return 'SECOND REDEMPTION SUCCEEDED';
+        const { rows } = await database.query(`select * from public.pf_redeem_invitation($1)`, [token[0].token]);
+        return { ok: true, rows, message: null };
       } catch (e) {
-        return String(e?.message ?? e).split('\n')[0];
+        return { ok: false, rows: [], message: String(e?.message ?? e).split('\n')[0] };
       }
     }),
   );
-  check('the same token cannot be used twice', second.value !== 'SECOND REDEMPTION SUCCEEDED', String(second.value));
+  check('redeeming the same token again succeeds', second.value?.ok === true, String(second.value?.message));
+  check(
+    '...and returns the membership already held',
+    second.value?.rows?.[0]?.branch === created.branch_id && second.value?.rows?.[0]?.granted_role === 'owner',
+    JSON.stringify(second.value?.rows?.[0]),
+  );
+  const [membershipCount] = await query(
+    database,
+    `select count(*)::int as n from branch_memberships where user_id = $1 and branch_id = $2`,
+    [INVITEE, created.branch_id],
+  );
+  check('...and does not create a second membership', membershipCount?.n === 1, String(membershipCount?.n));
 }
 
 section('8b. expired and malformed invitations are rejected');
