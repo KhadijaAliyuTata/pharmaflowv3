@@ -31,6 +31,16 @@ import { isDemoMode } from '~/lib/session';
  * The residual risk is that a future caller invokes `usePharmacyActions()` without
  * consulting this module. That is called out in the write-phase notes.
  *
+ * ## What it covers on `/inventory`
+ *
+ * The panel is not only the catalogue. The same screen edits a stock count, a
+ * selling price, a sale lock and a batch recall. All four — stock adjustment,
+ * price edit, safety lock, batch recall — funnel through one `openAction`
+ * handler, which consults this module before the dialog can open. They are
+ * refused with the same message and the same "nothing has been changed" promise
+ * as add/edit product, so a live build has one rule across the screen instead of
+ * a rule per control.
+ *
  * ## Demo mode is unaffected
  *
  * `isDemoMode()` is constant-false in a production build (`DEMO_ALLOWED` folds), so

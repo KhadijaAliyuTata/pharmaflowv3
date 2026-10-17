@@ -340,10 +340,23 @@ export async function listCreditLedger(accountId: string) {
 /**
  * Record a credit payment.
  *
- * `balance_after` is checked by `pf_check_credit_ledger_balance` against the
- * account's current `outstanding_balance` — but note that trigger is defined in
- * the migration and never attached, so the invariant is currently unenforced.
- * The client must therefore send a correct `balance_after`. See the migration map.
+ * The ledger invariant is enforced on both sides. `pf_check_credit_ledger_balance`
+ * runs BEFORE INSERT on `credit_ledger` — the trigger is attached at
+ * `20261004090000_stock_ledger_and_fefo_foundation.sql:39-41`, not merely defined
+ * — and `pf_check_credit_account_ledger` runs BEFORE UPDATE on `credit_accounts`
+ * (`:79-81`). Together they pin each account's `outstanding_balance` to its
+ * latest ledger `balance_after`, so a `balance_after` sent from here must equal
+ * the account's *current* balance, and the same insert cannot then move it.
+ *
+ * `20261012120000_authoritative_checkout.sql:167-191` redefines the first check
+ * to return early only while the transaction-local `pharmaflow.credit_write`
+ * setting is `'1'`, which only `pf_complete_sale` sets. That escape is not
+ * reachable from this direct insert, so the invariant fully applies to anything
+ * sent from here.
+ *
+ * This path is demo-only: no live screen calls it, and it cannot correctly move
+ * a balance (a live payment needs an owner-scoped RPC that sets the flag and
+ * writes ledger-then-account in that order, like `pf_complete_sale`).
  */
 export async function recordCreditPayment(input: CreditLedgerInsert) {
   if (!isSupabaseConfigured()) return { ok: false, error: OFFLINE } as const;

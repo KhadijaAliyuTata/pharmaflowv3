@@ -939,40 +939,52 @@ function PointOfSale() {
 
               {(outstanding > 0 || creditAccountId !== NO_ACCOUNT) && (
                 <FieldGroup>
-                  <Field>
-                    <FieldLabel htmlFor="pos-account">Credit account</FieldLabel>
-                    <Select
-                      value={creditAccountId}
-                      onValueChange={(value) => setCreditAccountId(value ?? NO_ACCOUNT)}
-                    >
-                      <SelectTrigger id="pos-account" className="h-11 w-full">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value={NO_ACCOUNT}>No account</SelectItem>
-                        {creditAccounts.map((account) => (
-                          <SelectItem key={account.id} value={account.id}>
-                            {account.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </Field>
+                  {/*
+                    Demo only. The picker reads `state.creditAccounts`, which is
+                    empty in a live build, so live it could only ever offer "No
+                    account" — a credit control that cannot take credit. Hidden
+                    until credit sales are migrated, rather than shown broken.
+                    The customer picker below reads `useCustomers()` and stays
+                    live, so a partially-paid sale can still name who owes.
+                  */}
+                  {isDemoMode() && (
+                    <>
+                      <Field>
+                        <FieldLabel htmlFor="pos-account">Credit account</FieldLabel>
+                        <Select
+                          value={creditAccountId}
+                          onValueChange={(value) => setCreditAccountId(value ?? NO_ACCOUNT)}
+                        >
+                          <SelectTrigger id="pos-account" className="h-11 w-full">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value={NO_ACCOUNT}>No account</SelectItem>
+                            {creditAccounts.map((account) => (
+                              <SelectItem key={account.id} value={account.id}>
+                                {account.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </Field>
 
-                  {creditAccount && (
-                    <p className="text-xs text-muted-foreground">
-                      <Money value={creditAccount.outstandingBalance} /> of{' '}
-                      <Money value={creditAccount.creditLimit} /> used ·{' '}
-                      <Money value={balanceAfter} /> after this sale
-                    </p>
-                  )}
+                      {creditAccount && (
+                        <p className="text-xs text-muted-foreground">
+                          <Money value={creditAccount.outstandingBalance} /> of{' '}
+                          <Money value={creditAccount.creditLimit} /> used ·{' '}
+                          <Money value={balanceAfter} /> after this sale
+                        </p>
+                      )}
 
-                  {overCreditLimit && creditAccount && (
-                    <p className="text-sm text-destructive">
-                      Over the credit limit by{' '}
-                      <Money value={subtract(balanceAfter, creditAccount.creditLimit)} />.
-                      Take a partial payment instead.
-                    </p>
+                      {overCreditLimit && creditAccount && (
+                        <p className="text-sm text-destructive">
+                          Over the credit limit by{' '}
+                          <Money value={subtract(balanceAfter, creditAccount.creditLimit)} />.
+                          Take a partial payment instead.
+                        </p>
+                      )}
+                    </>
                   )}
 
                   <Field>
