@@ -36,6 +36,10 @@ import { expiryBuckets } from '~/domain/selectors';
 import type { Medicine, MedicineBatch } from '~/domain/types';
 import { useMedicines } from '~/hooks/use-medicines';
 import { useIsOwner } from '~/hooks/use-is-owner';
+import {
+  CATALOGUE_WRITE_UNAVAILABLE,
+  catalogueWritesAvailable,
+} from '~/lib/catalogue-writes';
 import { usePharmacy, usePharmacyActions } from '~/store/pharmacy';
 
 export const Route = createFileRoute('/_app/expiry')({
@@ -90,6 +94,32 @@ function Expiry() {
   const { adjustStock } = usePharmacyActions();
 
   const [writeOff, setWriteOff] = useState<ExpiryRow | null>(null);
+  /**
+   * Why a write-off was refused. Non-null means the disposal was not started and
+   * nothing was changed.
+   */
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const writesAvailable = catalogueWritesAvailable();
+
+  /**
+   * The one door into a disposal.
+   *
+   * Live mode reads the catalogue from Supabase while `adjustStock` rewrites the
+   * seeded `state.medicines` in localStorage — two different collections of rows.
+   * So the write is refused here with a visible reason instead of opening a
+   * dialog whose "success" would never reach the database. Gating the single
+   * handler, rather than the row button, means a control added later cannot open
+   * the dialog behind it. Demo mode is unaffected: there the store is the
+   * pharmacy and the disposal works as it always did.
+   */
+  function openWriteOff(row: ExpiryRow) {
+    if (!writesAvailable) {
+      setActionNotice(CATALOGUE_WRITE_UNAVAILABLE);
+      return;
+    }
+    setActionNotice(null);
+    setWriteOff(row);
+  }
 
   const buckets = useMemo(() => expiryBuckets(medicines), [medicines]);
 
@@ -223,9 +253,21 @@ function Expiry() {
           group={group}
           rows={grouped[group]}
           isOwner={isOwner}
-          onWriteOff={setWriteOff}
+          onWriteOff={openWriteOff}
         />
       ))}
+
+      {/* A refused write-off. Shown instead of opening the dialog, and it clears
+          on the next attempt, so it never misreports a disposal that did not
+          happen. */}
+      {actionNotice && (
+        <p
+          role="alert"
+          className="rounded-lg border border-warning-border bg-warning-subtle px-3 py-2 text-sm text-warning"
+        >
+          {actionNotice}
+        </p>
+      )}
 
       {writeOff && (
         <WriteOffDialog
