@@ -283,16 +283,15 @@ function DemoAccounts({ onPick }: { onPick: (account: (typeof DEMO_ACCOUNTS)[num
 /* -------------------------------------------------------- forgot password */
 
 /**
- * States the real recovery path instead of faking one.
+ * Names the person who can actually restore access, and stops there.
  *
- * v2's modal showed "a 6-digit recovery code has been sent to …" and sent
- * nothing at all. This one says what is true and names the step that actually
- * works: an owner can send a fresh invitation, and opening it sets a new
- * password.
+ * Recovery is an owner's action, not a self-service flow: an owner issues a fresh
+ * invitation and opening it lets the person set a new password. The dialog says
+ * who to ask rather than describing machinery — token tables, mail providers —
+ * that the person reading it cannot act on.
  *
- * What a self-service reset would need — a token table, an email provider — is
- * set out in the handover notes rather than here, because an end user cannot act
- * on either one.
+ * It offers no form, deliberately. There is no request this screen could send, so
+ * a "send reset email" field would be a control that does nothing.
  */
 function ForgotPassword() {
   const [open, setOpen] = useState(false);
@@ -305,20 +304,12 @@ function ForgotPassword() {
 
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>You cannot reset a password from here yet</DialogTitle>
+          <DialogTitle>Reset your password</DialogTitle>
           <DialogDescription>
-            This build has no self-service reset, so nothing was sent and no email is
-            coming.
+            Password resets are handled by your pharmacy owner. Contact them to be
+            re-invited.
           </DialogDescription>
         </DialogHeader>
-
-        <p className="flex gap-2 text-sm">
-          <ShieldCheck className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-          <span>
-            Ask the owner of your pharmacy to send you a new invitation. Opening it lets
-            you set a new password, and it works only for the address it was sent to.
-          </span>
-        </p>
 
         <DialogFooter>
           <DialogClose render={<Button variant="outline" />}>Close</DialogClose>
