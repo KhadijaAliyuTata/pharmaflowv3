@@ -53,9 +53,9 @@ import {
 } from '~/components/ui/table';
 import { PageHeader, SectionTitle, StatTile } from '~/components/app/primitives';
 import { formatRelative } from '~/domain/money';
-import { ACTION_LABEL, ACTION_TONE } from '~/domain/audit-labels';
 import type { StaffRole } from '~/lib/db.types';
 import { invitationLink } from '~/lib/join-link';
+import { actionLabelOf, actionToneOf } from '~/hooks/audit-mapping';
 import { useAuditEvents } from '~/hooks/use-audit-events';
 import { useIsOwner } from '~/hooks/use-is-owner';
 import { useStaff } from '~/hooks/use-staff';
@@ -73,8 +73,10 @@ export const Route = createFileRoute('/_app/staff')({
 
 const ALL = 'all';
 
-// ACTION_LABEL and ACTION_TONE moved to `~/domain/audit-labels` so this screen
-// and the owner dashboard's activity ledger cannot drift apart.
+// Labels and tones come from `~/domain/audit-labels` through `audit-mapping`'s
+// display helpers, so this screen and the owner dashboard's activity ledger
+// cannot drift apart — and an action the union does not know still renders a
+// humanised label rather than a blank badge.
 
 function initials(name: string): string {
   return name
@@ -137,7 +139,16 @@ function StaffScreen() {
     [events, actor, action],
   );
 
-  const actions = useMemo(() => Array.from(new Set(events.map((e) => e.action))), [events]);
+  // Every action present, known or not. An unknown action is offered by its raw
+  // value and labelled by the mapper, so the filter can never hide a row the
+  // list shows.
+  const actionOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const event of events) {
+      if (!seen.has(event.action)) seen.set(event.action, actionLabelOf(event));
+    }
+    return [...seen].map(([value, label]) => ({ value, label }));
+  }, [events]);
 
   if (!isOwner) {
     return (
@@ -358,9 +369,9 @@ function StaffScreen() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value={ALL}>All actions</SelectItem>
-                  {actions.map((item) => (
-                    <SelectItem key={item} value={item}>
-                      {ACTION_LABEL[item]}
+                  {actionOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -402,8 +413,8 @@ function StaffScreen() {
                       {event.actorRole === 'owner' ? 'Owner' : 'Assistant'}
                     </TableCell>
                     <TableCell>
-                      <Badge variant={ACTION_TONE[event.action]}>
-                        {ACTION_LABEL[event.action]}
+                      <Badge variant={actionToneOf(event)}>
+                        {actionLabelOf(event)}
                       </Badge>
                     </TableCell>
                     <TableCell className="max-w-96 whitespace-normal">

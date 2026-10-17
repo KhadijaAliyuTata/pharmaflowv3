@@ -10,7 +10,7 @@
  * the `AuditAction` type they describe, and every screen reads them.
  */
 
-import type { AuditAction } from './types';
+import type { ActionTone, AuditAction } from './types';
 
 export const ACTION_LABEL: Record<AuditAction, string> = {
   sale: 'Sale',
@@ -34,10 +34,7 @@ export const ACTION_LABEL: Record<AuditAction, string> = {
  * from the shelf; `discount` and `refund` are warnings because they gave value
  * away. Colour is never the only signal — the label text always accompanies it.
  */
-export const ACTION_TONE: Record<
-  AuditAction,
-  'success' | 'warning' | 'destructive' | 'secondary'
-> = {
+export const ACTION_TONE: Record<AuditAction, ActionTone> = {
   sale: 'success',
   refund: 'warning',
   void: 'destructive',

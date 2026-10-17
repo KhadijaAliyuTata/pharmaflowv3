@@ -45,7 +45,7 @@ import {
   StatTile,
 } from '~/components/app/primitives';
 import { formatPercent, formatRelative } from '~/domain/money';
-import { ACTION_LABEL, ACTION_TONE, LEDGER_ACTION_ORDER } from '~/domain/audit-labels';
+import { LEDGER_ACTION_ORDER } from '~/domain/audit-labels';
 import {
   EMPTY_LEDGER_FILTER,
   demandRadar,
@@ -60,6 +60,7 @@ import {
   type LedgerFilter,
 } from '~/domain/dashboard';
 import { dashboardSnapshot, reorderSuggestions } from '~/domain/selectors';
+import { actionLabelOf, actionToneOf } from '~/hooks/audit-mapping';
 import { useAuditEvents } from '~/hooks/use-audit-events';
 import { useMedicines } from '~/hooks/use-medicines';
 import { useIsOwner } from '~/hooks/use-is-owner';
@@ -180,11 +181,24 @@ function Dashboard() {
     [auditEvents],
   );
   const actors = useMemo(() => ledgerActors(auditEvents), [auditEvents]);
-  // Only offer an action filter for actions actually present, so the dropdown
-  // cannot offer a filter that returns nothing.
+  // Offer a filter for actions actually present, so the dropdown cannot offer a
+  // filter that returns nothing. Known actions come first, in the reviewed
+  // `LEDGER_ACTION_ORDER`; any action the union does not know follows, labelled
+  // by the mapper, so a live `role.*` or `pharmacy_*` event is filterable too.
   const actionOptions = useMemo(() => {
-    const present = new Set(auditEvents.map((event) => event.action));
-    return LEDGER_ACTION_ORDER.filter((action) => present.has(action));
+    const labels = new Map<string, string>();
+    for (const event of auditEvents) {
+      if (!labels.has(event.action)) labels.set(event.action, actionLabelOf(event));
+    }
+    const known = LEDGER_ACTION_ORDER.filter((action) => labels.has(action)).map((action) => ({
+      value: String(action),
+      label: labels.get(action) ?? String(action),
+    }));
+    const knownSet = new Set(known.map((option) => option.value));
+    const other = [...labels.entries()]
+      .filter(([value]) => !knownSet.has(value))
+      .map(([value, label]) => ({ value, label }));
+    return [...known, ...other];
   }, [auditEvents]);
 
   return (
@@ -416,62 +430,62 @@ function Dashboard() {
         />
       </div>
 
-      {/* 7. Recent Pharmacy Activities. */}
-      <Card>
-        <CardHeader className="border-b pb-3">
-          <SectionTitle
-            action={
-              // `/staff` is owner-only, so the link is too. It was shown to every
-              // role and led an assistant to a screen they cannot open.
-              isOwner && (
+      {/* 7. Recent Pharmacy Activities. Owner-only: `audit_read` is, so an
+          assistant would only ever meet this card empty. */}
+      {isOwner && (
+        <Card>
+          <CardHeader className="border-b pb-3">
+            <SectionTitle
+              action={
+                // `/staff` is owner-only, and so is this card.
                 <Button variant="ghost" size="sm" render={<Link to="/staff" />}>
                   View Full Audit Log
                   <ChevronRight className="size-3.5" />
                 </Button>
-              )
-            }
-          >
-            Recent Pharmacy Activities
-          </SectionTitle>
-        </CardHeader>
-        <CardContent className="px-0">
-          {auditError ? (
-            <p role="alert" className="px-4 py-8 text-center text-sm text-muted-foreground">
-              {auditError}
-            </p>
-          ) : auditLoading && recentActivity.length === 0 ? (
-            <p className="px-4 py-8 text-center text-sm text-muted-foreground">
-              Loading activity…
-            </p>
-          ) : recentActivity.length === 0 ? (
-            <p className="px-4 py-8 text-center text-sm text-muted-foreground">
-              No activity recorded yet.
-            </p>
-          ) : (
-            <ul className="divide-y">
-              {recentActivity.map((event) => (
-                <li
-                  key={event.id}
-                  className="flex items-start gap-3 px-4 py-2.5"
-                >
-                  <Badge variant={ACTION_TONE[event.action]} className="mt-0.5 shrink-0">
-                    {ACTION_LABEL[event.action]}
-                  </Badge>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm">{event.description}</p>
-                    <p className="truncate text-xs text-muted-foreground">
-                      {event.actorName}
-                    </p>
-                  </div>
-                  <span className="shrink-0 text-xs text-muted-foreground">
-                    {formatRelative(event.timestamp)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </CardContent>
-      </Card>
+              }
+            >
+              Recent Pharmacy Activities
+            </SectionTitle>
+          </CardHeader>
+          <CardContent className="px-0">
+            {auditError ? (
+              <p role="alert" className="px-4 py-8 text-center text-sm text-muted-foreground">
+                {auditError}
+              </p>
+            ) : auditLoading && recentActivity.length === 0 ? (
+              <p className="px-4 py-8 text-center text-sm text-muted-foreground">
+                Loading activity…
+              </p>
+            ) : recentActivity.length === 0 ? (
+              <p className="px-4 py-8 text-center text-sm text-muted-foreground">
+                No activity recorded yet.
+              </p>
+            ) : (
+              <ul className="divide-y">
+                {recentActivity.map((event) => (
+                  <li
+                    key={event.id}
+                    className="flex items-start gap-3 px-4 py-2.5"
+                  >
+                    <Badge variant={actionToneOf(event)} className="mt-0.5 shrink-0">
+                      {actionLabelOf(event)}
+                    </Badge>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm">{event.description}</p>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {event.actorName}
+                      </p>
+                    </div>
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      {formatRelative(event.timestamp)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* 8. Pharmacy Team / staff accountability. */}
       <Card>
@@ -640,9 +654,9 @@ function Dashboard() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value={ALL}>All Action Types</SelectItem>
-                  {actionOptions.map((action) => (
-                    <SelectItem key={action} value={action}>
-                      {ACTION_LABEL[action]}
+                  {actionOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -686,8 +700,8 @@ function Dashboard() {
                         {formatRelative(event.timestamp)}
                       </TableCell>
                       <TableCell>
-                        <Badge variant={ACTION_TONE[event.action]}>
-                          {ACTION_LABEL[event.action]}
+                        <Badge variant={actionToneOf(event)}>
+                          {actionLabelOf(event)}
                         </Badge>
                       </TableCell>
                       <TableCell>{event.description}</TableCell>

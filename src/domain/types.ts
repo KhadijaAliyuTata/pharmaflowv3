@@ -392,6 +392,13 @@ export interface MedicineRequest {
 
 /* ------------------------------------------------------- audit and alerts */
 
+/**
+ * Badge tone for an audit action. The four tones `ACTION_TONE` uses, matching
+ * the `Badge` variants that carry them. Kept beside the action itself so the
+ * label map and the mapper share one definition.
+ */
+export type ActionTone = 'success' | 'warning' | 'destructive' | 'secondary';
+
 export type AuditAction =
   | 'sale'
   | 'refund'
@@ -412,6 +419,15 @@ export interface AuditEvent {
   actorName: string;
   actorRole: Role;
   action: AuditAction;
+  /**
+   * Display label for `action`. `audit_events.action` is unconstrained text, so
+   * a live row may carry a value outside `AuditAction`; the mapper sets this for
+   * every row it maps. The seeded log omits it and the screens fall back to
+   * `ACTION_LABEL` through `audit-mapping`'s `actionLabelOf`.
+   */
+  actionLabel?: string;
+  /** Display tone for `action`; an unknown action is neutral. See `actionLabel`. */
+  actionTone?: ActionTone;
   description: string;
   metadata?: Record<string, unknown>;
 }

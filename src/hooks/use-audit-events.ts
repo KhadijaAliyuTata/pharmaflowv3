@@ -6,6 +6,7 @@ import { isSupabaseConfigured } from '~/lib/supabase/client';
 import { isDemoMode } from '~/lib/session';
 import { usePharmacy } from '~/store/pharmacy';
 import { toAuditEvents } from './audit-mapping';
+import { useIsOwner } from './use-is-owner';
 
 /**
  * The audit trail, from Supabase in live mode.
@@ -19,12 +20,15 @@ import { toAuditEvents } from './audit-mapping';
  *
  * In demo mode the seeded log *is* the data, and the store is read directly.
  *
- * ## Owner-only, and the database is what enforces it
+ * ## Owner-only: no query at all for a non-owner
  *
  * `audit_read` is `pf_is_owner() and branch_id = pf_current_branch()`, so an
- * assistant's read returns zero rows rather than an error. The hook does not
- * re-check the role — `/staff` and the dashboard already decide which screens
- * render — but it is why an assistant sees an empty list rather than a failure.
+ * assistant's read would return zero rows rather than an error. Rather than
+ * spend that round trip to learn nothing, the hook asks `useIsOwner()` — the
+ * same source the screens gate on, not a second opinion — and, when the caller
+ * is not an owner, returns the empty shape without querying. The database is
+ * still what enforces the rule; this only avoids asking a question whose answer
+ * is already known.
  *
  * ## The actor's name is resolved by the repository, not here
  *
@@ -51,6 +55,9 @@ export function useAuditEvents(limit = 100): AuditEventsState {
   // stale local log cannot reach the screen.
   const localEvents = usePharmacy((state) => state.auditEvents);
   const { status, currentBranchId, error: branchError } = useActiveBranch();
+  // The same authoritative check the screens gate on. Read here so a non-owner
+  // never issues the read at all.
+  const isOwner = useIsOwner();
 
   const [remote, setRemote] = useState<{ branchId: string; rows: AuditEventWithActor[] } | null>(
     null,
@@ -68,7 +75,8 @@ export function useAuditEvents(limit = 100): AuditEventsState {
   const refresh = useCallback(() => setReloadToken((n) => n + 1), []);
 
   const demo = isDemoMode();
-  const useRemote = !demo && isSupabaseConfigured() && status === 'ready' && currentBranchId !== null;
+  const useRemote =
+    !demo && isSupabaseConfigured() && isOwner && status === 'ready' && currentBranchId !== null;
 
   useEffect(() => {
     if (!useRemote || !currentBranchId) return;
@@ -125,6 +133,20 @@ export function useAuditEvents(limit = 100): AuditEventsState {
     }
 
     // ---- live mode. No local data, ever. ------------------------------------
+    // Not an owner: `audit_read` would return nothing, so there is no query and
+    // no round trip. Empty, not an error — an assistant is not missing anything
+    // they are allowed to see.
+    if (!isOwner) {
+      return {
+        events: [],
+        loading: false,
+        error: null,
+        source: 'supabase' as const,
+        branchId: currentBranchId,
+        refresh,
+      };
+    }
+
     // A branch that failed to resolve is an error, not a reason to show another
     // pharmacy's cached log.
     if (isSupabaseConfigured() && status === 'error') {
@@ -158,5 +180,17 @@ export function useAuditEvents(limit = 100): AuditEventsState {
       branchId: currentBranchId,
       refresh,
     };
-  }, [demo, localEvents, useRemote, remote, currentBranchId, mapped, loading, error, branchError, refresh]);
+  }, [
+    demo,
+    localEvents,
+    isOwner,
+    useRemote,
+    remote,
+    currentBranchId,
+    mapped,
+    loading,
+    error,
+    branchError,
+    refresh,
+  ]);
 }
