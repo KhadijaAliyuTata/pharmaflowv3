@@ -1012,6 +1012,28 @@ export type Database = {
         }[];
       };
       /**
+       * The receiving write path, from 20261012170000_receive_stock.
+       *
+       * SECURITY DEFINER, and the only way a receipt, a lot and the movement that
+       * follows from it are written together. Branch and actor are resolved
+       * server-side; the function accepts no branch and refuses a caller who is not
+       * a member of the one it resolves. Idempotent on `(branch_id,
+       * receipt_number)`: resubmitting the same number returns the receipt that
+       * already exists. A non-owner's cost is dropped rather than refused, so the
+       * delivery still books in and waits in the pricing queue.
+       */
+      pf_receive_stock: {
+        Args: { p_receipt: Json };
+        Returns: {
+          receipt_id: string;
+          batch_id: string | null;
+          receipt_number: string;
+          state: ReceiptState;
+          base_units_received: number;
+          already_received: boolean;
+        };
+      };
+      /**
        * Platform administration, from 20261012140000_platform_admin.
        *
        * Onboarding and suspension are `service_role` only - no browser can

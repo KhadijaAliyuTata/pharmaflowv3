@@ -26,7 +26,12 @@ import {
 import { Money, PageHeader, SectionTitle, StatTile } from '~/components/app/primitives';
 import { formatCount, formatWhen, isoDate, money, multiply, sum } from '~/domain/money';
 import { findBaseUnit, findUnit } from '~/domain/units';
+import { useIsOwner } from '~/hooks/use-is-owner';
 import { useMedicines } from '~/hooks/use-medicines';
+import { useStockMovements } from '~/hooks/use-stock-movements';
+import { useStockReceipts } from '~/hooks/use-stock-receipts';
+import { isDemoMode } from '~/lib/session';
+import { receiveStock as receiveStockRemote } from '~/lib/supabase/stock';
 import { usePharmacy, usePharmacyActions } from '~/store/pharmacy';
 import type { ReceiptStatus, StockMovementType } from '~/domain/types';
 
@@ -37,6 +42,28 @@ export const Route = createFileRoute('/_app/stock-receiving')({
 /** Stock is a 24-month product. A year out is the safe default for a new batch. */
 function oneYearOut(): string {
   return isoDate(new Date(Date.now() + 365 * 86_400_000));
+}
+
+/**
+ * The receipt number for one delivery attempt.
+ *
+ * `stock_receipts_number_unique` is `(branch_id, receipt_number)`, so this number
+ * is also the idempotency key: a resubmission of the *same* delivery — a
+ * double-click, a retry after a dropped connection — books nothing twice, because
+ * `pf_receive_stock` finds the number and returns the receipt it already wrote.
+ *
+ * That only holds if the number is stable across a retry and different for the
+ * next delivery, so it is held in state and only replaced once a submit succeeds.
+ * The random tail is what keeps two deliveries apart; the year is what makes it
+ * readable on a delivery note. `crypto.randomUUID` is not available on every
+ * origin this runs on, so the fallback is real, not decorative.
+ */
+function newReceiptNumber(): string {
+  const tail =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID().slice(0, 8)
+      : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  return `GRN-${new Date().getFullYear()}-${tail.toUpperCase()}`;
 }
 
 const MOVEMENT_LABEL: Record<StockMovementType, string> = {
@@ -68,11 +95,36 @@ const RECEIPT_STATUS: Record<ReceiptStatus, { label: string; variant: 'warning' 
 function StockReceiving() {
   // Catalogue from Supabase in live mode; useMedicines has no local
   // fallback there, so a failed read surfaces as an error, not as seed data.
-  const { medicines } = useMedicines();
+  const { medicines, refresh: refreshMedicines } = useMedicines();
   const suppliers = usePharmacy((state) => state.suppliers);
-  const receipts = usePharmacy((state) => state.stockReceipts);
-  const movements = usePharmacy((state) => state.stockMovements.slice(0, 20));
-  const canPrice = usePharmacy((state) => state.currentUser.canApprovePricing);
+  // Receipts and movements, in whichever mode has them. Both read Supabase in a
+  // live build and the seeded ledger in demo, so the counts and tables below are
+  // the same figures either way.
+  const {
+    receipts,
+    loading: receiptsLoading,
+    error: receiptsError,
+    refresh: refreshReceipts,
+  } = useStockReceipts();
+  const {
+    movements,
+    loading: movementsLoading,
+    error: movementsError,
+    refresh: refreshMovements,
+  } = useStockMovements(20);
+  /**
+   * Owner, according to the database — not `state.currentUser.canApprovePricing`.
+   *
+   * `profiles.role` is a display cache that `branch_memberships.role` supersedes
+   * and nothing repairs, so an owner demoted at their branch would keep the cost
+   * fields. `useIsOwner()` asks `pf_is_owner()`, the same question the triggers
+   * ask. It is display gating only: the database refuses a non-owner's cost
+   * regardless of what this renders.
+   */
+  const canPrice = useIsOwner();
+  // In demo mode the store *is* the pharmacy and receiving stays local, exactly
+  // as it always was. In live mode the delivery is the database's to record.
+  const live = !isDemoMode();
   const { receiveStock } = usePharmacyActions();
   const navigate = useNavigate();
 
@@ -80,6 +132,9 @@ function StockReceiving() {
   const [supplierId, setSupplierId] = useState('');
   const [batchNumber, setBatchNumber] = useState('');
   const [quantity, setQuantity] = useState('');
+  /** The idempotency key for the delivery being entered. See `newReceiptNumber`. */
+  const [receiptNumber, setReceiptNumber] = useState(() => newReceiptNumber());
+  const [submitting, setSubmitting] = useState(false);
   /**
    * Which packaging unit the count is in.
    *
@@ -134,38 +189,114 @@ function StockReceiving() {
     toast.success(`${match.name} selected`, { description: `${match.strength} · ${code}` });
   };
 
-  const submit = () => {
+  /**
+   * Book the delivery in.
+   *
+   * Demo mode keeps the original local path, because there the store genuinely is
+   * the pharmacy. Live mode calls `pf_receive_stock`, which writes the receipt,
+   * the lot and (through the batch trigger) the movement in one transaction and
+   * resolves the branch, the actor and the received date itself. Only the counted
+   * quantity, its unit and the paperwork's own fields are sent.
+   *
+   * The receipt number is reused across retries of the same attempt and replaced
+   * only on success, which is what makes a double-click safe rather than a second
+   * delivery. See `newReceiptNumber`.
+   */
+  const submit = async () => {
+    if (submitting) return;
     setError(null);
 
-    const result = receiveStock({
-      medicineId,
-      batchNumber,
-      quantity: units,
-      unitKey: receiveUnit?.key ?? '',
-      supplierId,
-      expiryDate,
-      ...(canPrice && costInput ? { costPerBaseUnit: cost } : {}),
-      ...(canPrice && priceInput ? { pricePerBaseUnit: price } : {}),
-    });
-
-    if (!result.ok) {
-      setError(result.error);
-      return;
-    }
-
-    const receipt = result.value;
-    setBatchNumber('');
-    setQuantity('');
-
-    if (receipt.status === 'pending_pricing') {
-      toast('Sent for owner approval', {
-        description: `${receipt.receiptNumber} · ${receipt.medicineName}`,
-        action: { label: 'Open pricing', onClick: () => void navigate({ to: '/pricing' }) },
+    if (!live) {
+      const result = receiveStock({
+        medicineId,
+        batchNumber,
+        quantity: units,
+        unitKey: receiveUnit?.key ?? '',
+        supplierId,
+        expiryDate,
+        ...(canPrice && costInput ? { costPerBaseUnit: cost } : {}),
+        ...(canPrice && priceInput ? { pricePerBaseUnit: price } : {}),
       });
+
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+
+      const receipt = result.value;
+      setBatchNumber('');
+      setQuantity('');
+
+      if (receipt.status === 'pending_pricing') {
+        toast('Sent for owner approval', {
+          description: `${receipt.receiptNumber} · ${receipt.medicineName}`,
+          action: { label: 'Open pricing', onClick: () => void navigate({ to: '/pricing' }) },
+        });
+        return;
+      }
+
+      toast.success(`${receipt.receiptNumber} received and priced`);
       return;
     }
 
-    toast.success(`${receipt.receiptNumber} received and priced`);
+    setSubmitting(true);
+    try {
+      const result = await receiveStockRemote({
+        receiptNumber,
+        medicineId,
+        batchNumber: batchNumber.trim(),
+        baseUnitsReceived: incomingBaseUnits,
+        ...(supplierId ? { supplierId } : {}),
+        expiryDate,
+        ...(canPrice && costInput ? { costPerBaseUnit: cost } : {}),
+        ...(canPrice && priceInput ? { pricePerBaseUnit: price } : {}),
+        // The counted unit, snapshotted. Only when the count is a whole number in
+        // that unit — the column is an integer and the note says "5 boxes".
+        ...(receiveUnit && Number.isInteger(units) && units > 0
+          ? {
+              receivedQuantity: units,
+              receivedUnitKey: receiveUnit.key,
+              receivedUnitName: receiveUnit.name,
+              receivedUnitMultiplier: receiveUnit.multiplier,
+            }
+          : {}),
+      });
+
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+
+      const saved = result.data;
+      setBatchNumber('');
+      setQuantity('');
+      // A new number for the next delivery. The one just used stays the key for a
+      // retry of *this* attempt, which is the whole point of holding it in state.
+      setReceiptNumber(newReceiptNumber());
+      // The database moved stock: re-read so the counts and tables are current.
+      refreshReceipts();
+      refreshMovements();
+      refreshMedicines();
+
+      if (saved.alreadyReceived) {
+        toast('Already recorded', {
+          description: `${saved.receiptNumber} was not booked in a second time.`,
+        });
+        return;
+      }
+
+      if (saved.state === 'pending_pricing') {
+        toast('Sent for owner approval', {
+          description: saved.receiptNumber,
+          action: { label: 'Open pricing', onClick: () => void navigate({ to: '/pricing' }) },
+        });
+        return;
+      }
+
+      toast.success(`${saved.receiptNumber} received and priced`);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -184,12 +315,14 @@ function StockReceiving() {
           value={receipts.filter((r) => r.status === 'pending_pricing').length}
           hint="Owner approval needed"
           icon={<TriangleAlert className="size-4" />}
+          loading={receiptsLoading}
         />
         <StatTile
           label="Receipts logged"
           value={receipts.length}
           hint={`${movements.length} movements recorded`}
           icon={<PackagePlus className="size-4" />}
+          loading={receiptsLoading}
         />
       </div>
 
@@ -203,7 +336,7 @@ function StockReceiving() {
               className="space-y-4"
               onSubmit={(event) => {
                 event.preventDefault();
-                submit();
+                void submit();
               }}
             >
               <FieldGroup className="gap-4">
@@ -411,8 +544,8 @@ function StockReceiving() {
                   </p>
                 )}
 
-                <Button type="submit" className="h-10 w-full">
-                  Receive stock
+                <Button type="submit" className="h-10 w-full" disabled={submitting}>
+                  {submitting ? 'Recording…' : 'Receive stock'}
                 </Button>
               </FieldGroup>
             </form>
@@ -434,7 +567,13 @@ function StockReceiving() {
               </SectionTitle>
             </CardHeader>
             <CardContent>
-              {receipts.length === 0 ? (
+              {receiptsError ? (
+                <p role="alert" className="py-6 text-center text-sm text-muted-foreground">
+                  {receiptsError}
+                </p>
+              ) : receiptsLoading && receipts.length === 0 ? (
+                <p className="py-6 text-center text-sm text-muted-foreground">Loading receipts…</p>
+              ) : receipts.length === 0 ? (
                 <p className="py-6 text-center text-sm text-muted-foreground">
                   Nothing received yet.
                 </p>
@@ -493,7 +632,13 @@ function StockReceiving() {
               <SectionTitle>Stock movements</SectionTitle>
             </CardHeader>
             <CardContent>
-              {movements.length === 0 ? (
+              {movementsError ? (
+                <p role="alert" className="py-6 text-center text-sm text-muted-foreground">
+                  {movementsError}
+                </p>
+              ) : movementsLoading && movements.length === 0 ? (
+                <p className="py-6 text-center text-sm text-muted-foreground">Loading movements…</p>
+              ) : movements.length === 0 ? (
                 <p className="py-6 text-center text-sm text-muted-foreground">
                   No movements recorded yet.
                 </p>
