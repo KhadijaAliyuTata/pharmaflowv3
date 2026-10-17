@@ -87,7 +87,8 @@ for (const r of regressions) {
  * ran, and the script prints "Identity and history checks passed." having
  * verified nothing.
  *
- * The pre-apply gate cannot have this bug: it requires EXACTLY 17, so 0 stops.
+ * The pre-apply gate cannot have this bug: it requires the exact expected set, so
+ * nothing named stops it.
  */
 function secondDryRunGate(exitCode, namesFound) {
   if (exitCode !== 0) {
@@ -117,7 +118,7 @@ report(secondDryRunGate(0, 0).ok, 'clean dry run naming 0 migrations -> SUCCESS'
 
 // Anything still pending fails, even when the command succeeded.
 report(!secondDryRunGate(0, 1).ok, 'successful dry run naming 1 -> FAILURE', secondDryRunGate(0, 1).reason);
-report(!secondDryRunGate(0, 17).ok, 'successful dry run naming 17 -> FAILURE');
+report(!secondDryRunGate(0, 20).ok, 'successful dry run naming 20 -> FAILURE');
 
 // The exit code must be checked BEFORE the name count, otherwise the order of
 // the two conditions would let a failure through when names happen to be 0.

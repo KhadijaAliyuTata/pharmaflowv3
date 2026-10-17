@@ -13,8 +13,8 @@ Snapshot taken during the Google AI Studio preparation audit.
 | Build config | `vite.config.ts` | 4 plugins, `envPrefix ['VITE_','PUBLIC_']`, `__DEV_SERVER__` define |
 | Deploy config | `wrangler.jsonc` | worker `pharmaflow`, no routes, no vars, no D1/Hyperdrive |
 | Secrets | `.env`, `.dev.vars`, `wrangler.jsonc` | **names and shapes only**; no value printed |
-| Migrations | all 15 files | chain ordered, last one unapplied |
-| Verification suites | 21 files | 17 runnable suites + harness |
+| Migrations | all 20 files | chain ordered; none applied to a real database |
+| Verification suites | 23 files | 19 runnable suites + 4 support files |
 | Gemini integration | `api/gemini.ts`, `lib/gemini.ts`, `domain/gemini.ts` | present; key is server-side |
 | AI Studio export ZIP | filesystem search of 4 roots | **not found** |
 
@@ -22,7 +22,7 @@ Snapshot taken during the Google AI Studio preparation audit.
 
 | Check | Command / method | Outcome |
 |---|---|---|
-| Database schema, RLS, checkout, invitations | `bun run verify:db` | **ALL SUITES PASSED — 17 suites**, exit 0 |
+| Database schema, RLS, checkout, invitations | `bun run verify:db` | **18 of 19 suites pass** (latest run); `verify-auth-modes.ts` fails, exit 1 |
 | Checkout suite specifically | `bun supabase/verify/verify-authoritative-checkout.mjs` | **83 passed, 0 failed**, exit 0 |
 | Types | `bun run typecheck` | exit 0 |
 | Production build | `bun x vite build` | exit 0 |
@@ -88,6 +88,10 @@ The two files flagged by the previous session are **confirmed present**:
 
 ## 5. Tests
 
+Preparation-audit snapshot (HEAD `922da67`). The table records the 17 suites that
+existed then; `verify-platform-admin` and `verify-void-sale` were added afterwards.
+The current result is stated after the table.
+
 | Suite | Result |
 |---|---|
 | `verify-accept-invite` | 53 passed, 0 failed |
@@ -108,15 +112,22 @@ The two files flagged by the previous session are **confirmed present**:
 | `verify-stock-authority` | 15 passed, 0 failed |
 | `verify-tenant-isolation` | 20 passed, 0 failed |
 
-No suite failed. `bun run typecheck` and `bun x vite build` both exit 0.
+At that snapshot no suite failed. In the latest `bun run verify:db` run (2026-10-17),
+**18 of 19 suites pass** and `verify-auth-modes.ts` fails. `bun run typecheck` and
+`bun x vite build` both exit 0.
 
 **Not tested, and not claimed:** real concurrent transactions; browser behaviour;
 any migration against a real database; the deployed Worker.
 
 ## 6. Before production deployment
 
-1. Apply `20261012120000_authoritative_checkout.sql` to a **staging** project
-   and re-run all 17 suites against real PostgreSQL, including a two-connection
+1. Prepare a **staging** project with the **complete, verified 20-migration chain**
+   in `supabase/migrations/`, applied in the documented filename order (see
+   `docs/STAGING-VALIDATION.md`) — not by applying
+   `20261012120000_authoritative_checkout.sql` on its own, since it is one link in
+   a chain that depends on the migrations before it. Nothing in the chain has been
+   applied to a real database, so staging has not been migrated or validated.
+   Then re-run all 19 suites against real PostgreSQL, including a two-connection
    concurrency test for `pf_complete_sale`.
 2. Fix void-does-not-restore-stock.
 3. Migrate `receiveStock` to a database write, or accept that stock receipts are
@@ -124,7 +135,10 @@ any migration against a real database; the deployed Worker.
 4. Migrate the customer and credit-account pickers to Supabase.
 5. Confirm `PUBLIC_APP_URL` matches between `.env` and the Worker secret.
 6. Verify the assistant role sees no cost, margin or profit anywhere.
-7. Commit and push the 30 uncommitted files — **with your explicit approval**.
+7. Commit and push the **12 modified files** (this documentation set plus the
+   staging-safeguard scripts) — **with your explicit approval**. The repository
+   root also holds two stray untracked files that are not part of this work;
+   leave them out.
 
 ## 7. Files created by this audit
 

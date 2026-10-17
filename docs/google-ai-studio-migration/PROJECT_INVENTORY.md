@@ -93,8 +93,8 @@ src/
   store/pharmacy.ts            external store (useSyncExternalStore) + localStorage
   hooks/                       7 hooks — the data-source boundary
 supabase/
-  migrations/                  15 SQL migrations, timestamp-ordered
-  verify/                      21 files: PGlite harness + 17 suites
+  migrations/                  20 SQL migrations, lexicographic filename order
+  verify/                      23 files: 19 suites + PGlite harness, runner, README, phase-0 audit
 docs/                          (this package)
 ```
 

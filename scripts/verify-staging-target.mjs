@@ -17,10 +17,12 @@
  *
  * ## Why this exists at all
  *
- * `supabase/.temp/project-ref` points at PRODUCTION. Any bare
- * `supabase db push` in this repository therefore targets production. This
- * script exists so that fact is stated loudly and mechanically before anyone
- * gets near a migration command, rather than being rediscovered each time.
+ * `supabase/.temp/project-ref` is the link a bare `supabase db push` uses. It
+ * must BE the staging project: if it points at production, a bare command writes
+ * to production, and if it points anywhere else the target is not the one this
+ * configuration was verified against. This script exists so that fact is stated
+ * loudly and mechanically before anyone gets near a migration command, rather
+ * than being rediscovered each time.
  *
  * Exit codes: 0 safe, 1 unsafe (do not migrate), 2 could not determine.
  *
@@ -120,18 +122,36 @@ check(
   envRef === null ? 'could not read a ref from PUBLIC_SUPABASE_URL' : 'distinct',
 );
 
+// --- 2b. the CLI link must BE the staging project ---------------------------
+// The link is what a bare `supabase db push` uses, so its identity is not a
+// detail: it is the difference between writing to staging and writing to
+// production. It must be the approved staging project, and every other outcome
+// stops the run:
+//
+//   absent / unreadable  -> a bare command has no predictable target
+//   == production        -> a bare command writes to PRODUCTION
+//   == anything else     -> the target is not the one this file verified
+//   == staging           -> the intended, verified state
+let linkDetail;
+if (linkedRef === null) {
+  linkDetail = 'no CLI link recorded (supabase/.temp/project-ref absent or unreadable)';
+} else if (stagingRef !== null && linkedRef === stagingRef) {
+  linkDetail = 'equals the approved staging project';
+} else if (prodRef !== null && linkedRef === prodRef) {
+  linkDetail = 'THE LINK IS PRODUCTION - a bare `db push` would write to production';
+} else {
+  linkDetail = 'UNEXPECTED PROJECT - not the approved staging ref, so a bare command has no verified target';
+}
 check(
-  linkedRef !== null && stagingRef !== null && stagingRef !== linkedRef,
-  'the staging ref differs from the current CLI link',
-  linkedRef === null
-    ? 'no CLI link recorded (supabase/.temp/project-ref absent)'
-    : 'distinct - the link still points at production, as intended',
+  linkedRef !== null && stagingRef !== null && linkedRef === stagingRef,
+  'the recorded CLI link is the staging project',
+  linkDetail,
 );
 
 // --- 3. the bare-command hazard ---------------------------------------------
-// Not a failure: production not being linked to staging is the desired state.
-// But `supabase db push` with no flags WILL use the link, so the hazard has to
-// be reported on every run rather than left for someone to rediscover.
+// Not a failure on its own - check 2b already requires the link to be staging -
+// but `supabase db push` with no flags WILL use the link, so the hazard is
+// reported on every run rather than left for someone to rediscover.
 const barePushTargetsProduction =
   linkedRef !== null && prodRef !== null && linkedRef === prodRef;
 

@@ -11,23 +11,25 @@
 #
 # There is no `--config` on `db push` or `link`. The CLI always reads
 # `supabase/config.toml`, and the authoritative link lives in
-# `supabase/.temp/project-ref` - which still points at PRODUCTION and has
-# deliberately not been changed.
+# `supabase/.temp/project-ref` - which points at the STAGING project.
 #
 # So this file is a **record**, not a switch. It exists so the staging project ref
 # is written down somewhere reviewable and diffable, and so that building a
 # dedicated staging workdir later is a copy rather than a re-derivation.
 #
-# ## Why production was not relinked
+# ## Why the CLI link points at staging
 #
-# `supabase/.temp/project-ref` currently points at production. Relinking it to
-# staging would mean the next `supabase db push` with no flags silently targets
-# staging instead - and, just as badly, that a developer expecting production
-# would get staging. Isolation comes from passing the target EXPLICITLY:
+# The link is shared state, so it cannot be right for a staging push and a
+# production push at the same time. It points at staging because that is the
+# safer of the two mistakes: a bare `supabase db push` aimed at staging is
+# recoverable, and one aimed at production is not. Isolation still comes from
+# passing the target EXPLICITLY:
 #
 #   supabase --workdir . db push --db-url "<staging session pooler uri>" --skip-vault
 #
-# `--db-url` ignores the link entirely. See docs/STAGING-VALIDATION.md.
+# `--db-url` ignores the link entirely. `scripts/verify-staging-target.mjs`
+# fails unless the recorded link equals the staging ref. See
+# docs/STAGING-VALIDATION.md.
 #
 # ## To make this file live
 #

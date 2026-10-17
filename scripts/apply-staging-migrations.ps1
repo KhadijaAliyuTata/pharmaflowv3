@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Apply the 17 migrations to STAGING, self-gating, read-only until every check passes.
+    Apply the 20 migrations to STAGING, self-gating, read-only until every check passes.
 
 .DESCRIPTION
     Paste this into the PowerShell window where $env:PGURI is already set. It runs
@@ -15,7 +15,7 @@
       3. Local config preflight passes - staging configured, distinct from prod.
       4. Connection preflight passes - correct ref, not production, empty.
       5. Pre-migration dump is written.
-      6. Dry run reports EXACTLY 17 pending migrations.
+      6. Dry run names EXACTLY the 20 expected migrations, in order.
       7. Dry run contains none of the stop-phrases.
       8. Apply, same explicit connection and arguments.
       9. Post-apply verification of history and schema.
@@ -65,9 +65,37 @@ if (-not $env:PGURI) {
 }
 
 # Hard constants. Not read from any file, so a corrupted config cannot retarget
-# this script.
+# this script - including the expected migration set, which is written out below
+# rather than globbed from supabase/migrations/. A copy of the folder cannot
+# change what this script expects; instead, scripts/selftest-dryrun-gate.mjs
+# asserts this exact list against the folder on disk, so a new migration fails the
+# offline self-test until it is added here on purpose.
 $ExpectedRef  = 'xnhsuifcbplnwtxnpedw'
-$ExpectedMigs = 17
+
+# The exact chain, in the exact order it must run. Forward-only, so filename order
+# is the order, and the dry run must name these and nothing else, in this sequence.
+$ExpectedMigrations = @(
+    '20261002160000_initial_schema.sql',
+    '20261004090000_stock_ledger_and_fefo_foundation.sql',
+    '20261005120000_unit_hierarchy.sql',
+    '20261005160000_branch_registration.sql',
+    '20261005190000_function_execute_hardening.sql',
+    '20261005210000_role_and_destructive_authorization.sql',
+    '20261005230000_receipt_pricing_authority.sql',
+    '20261005250000_branch_membership_role_authority.sql',
+    '20261005260000_role_change_auditability.sql',
+    '20261006090000_staff_invitations.sql',
+    '20261006150000_staff_invitation_expiry.sql',
+    '20261007120000_staff_invitation_claim.sql',
+    '20261007130000_revoke_invitation_clears_claim.sql',
+    '20261007140000_revoke_invitation_active_claim_only.sql',
+    '20261012120000_authoritative_checkout.sql',
+    '20261012130000_void_sale_restores_stock.sql',
+    '20261012140000_platform_admin.sql',
+    '20261012150000_redeem_invitation_idempotent.sql',
+    '20261012160000_redeem_invitation_check_order.sql',
+    '20261012170000_receive_stock.sql'
+)
 
 Write-Step '1. credential present'
 Write-Good '$env:PGURI is set (value never printed)'
@@ -130,14 +158,36 @@ $drySafe = Redact $dry
 Write-Host $drySafe
 
 # Checked for a clearer diagnosis rather than for safety: an errored dry run
-# names 0 migrations and is already caught by the "exactly 17" count below. This
-# just stops the operator reading "expected 17, named 0" when the real problem is
+# names no migrations and is already caught by the exact-set check below. This
+# just stops the operator reading "expected 20, named 0" when the real problem is
 # that the command failed.
 if ($dryCode -ne 0) { Stop-Run "the dry run itself FAILED (exit $dryCode). Its output cannot be trusted." }
 
-$found = [regex]::Matches($drySafe, '(?m)\b(2026\d{10}_\w+\.sql)\b') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique
+# Names in the ORDER the dry run prints them, first occurrence kept.
+#
+# Order is part of the assertion, not decoration. The chain is forward-only and
+# filename order is the order the migrations must run in, so the right set in the
+# wrong order is still wrong. The previous version piped through `Sort-Object
+# -Unique` here, which discarded the order and left the gate able to compare only
+# a count.
+#
+# The pattern matches ANY 14-digit version prefix, not just 2026. A version is an
+# opaque sort key, so a future `2027...` migration is a normal event - and with a
+# hard-coded `2026` it would not have been seen at all, so the chain would have
+# been applied with a migration missing from the count.
+$found = New-Object System.Collections.Generic.List[string]
+foreach ($m in [regex]::Matches($drySafe, '(?m)\b(\d{14}_\w+\.sql)\b')) {
+    $name = $m.Groups[1].Value
+    if (-not $found.Contains($name)) { $found.Add($name) }
+}
 Write-Note ("migrations named in the dry run: " + $found.Count)
 
+# `Already up to date` is a stop here ON PURPOSE. This gate runs against a fresh,
+# empty database (step 3 refuses anything else), which must list migrations to
+# apply; an "up to date" answer means the target is not the empty staging database
+# this script was written for. The post-apply SECOND dry run does NOT consult this
+# list - there, naming nothing is the expected result and is judged on that and on
+# exit 0 alone (see step 7).
 $stopPhrases = @(
     'Remote migration versions not found',
     'remote migration versions not found',
@@ -151,10 +201,27 @@ foreach ($p in $stopPhrases) {
     if ($drySafe -match [regex]::Escape($p)) { Stop-Run "dry run contains a stop-phrase: `"$p`". Read the output above." }
 }
 
-if ($found.Count -ne $ExpectedMigs) {
-    Stop-Run "expected exactly $ExpectedMigs pending migrations, the dry run named $($found.Count). NOT applying."
+# The exact set AND its order. A count alone is not enough: a chain that dropped
+# one migration and gained another would still count 20 and sail through.
+$mismatch = $null
+if ($found.Count -ne $ExpectedMigrations.Count) {
+    $mismatch = "expected exactly $($ExpectedMigrations.Count) pending migrations, the dry run named $($found.Count)"
+} else {
+    for ($i = 0; $i -lt $ExpectedMigrations.Count; $i++) {
+        if ($found[$i] -ne $ExpectedMigrations[$i]) {
+            $mismatch = "migration $($i + 1) of the chain should be $($ExpectedMigrations[$i]), the dry run named $($found[$i])"
+            break
+        }
+    }
 }
-Write-Good "exactly $ExpectedMigs migrations pending"
+if ($mismatch) {
+    $missing    = @($ExpectedMigrations | Where-Object { -not $found.Contains($_) })
+    $unexpected = @($found | Where-Object { $ExpectedMigrations -notcontains $_ })
+    if ($missing.Count -gt 0)    { Write-Note ("missing from the dry run : " + ($missing -join ', ')) }
+    if ($unexpected.Count -gt 0) { Write-Note ("unexpected in the dry run: " + ($unexpected -join ', ')) }
+    Stop-Run "$mismatch. NOT applying."
+}
+Write-Good "the dry run names the expected $($ExpectedMigrations.Count) migrations, in order"
 
 if ($WhatIf) {
     Write-Host ''
@@ -235,9 +302,10 @@ Write-Host (Redact $again)
 # and the script printed "Identity and history checks passed." on a run that had
 # verified nothing.
 #
-# The pre-apply gate does not have this problem: it requires EXACTLY 17 names, so
-# an errored dry run yields 0 and stops. This one requires zero, so the failure
-# mode is inverted and the exit code has to be checked explicitly.
+# The pre-apply gate does not have this problem: it requires EXACTLY the expected
+# set of 20, so an errored dry run yields nothing and stops. This one requires
+# zero, so the failure mode is inverted and the exit code has to be checked
+# explicitly.
 if ($againCode -ne 0) {
     Write-Bad "the second dry run FAILED (exit $againCode). Its output cannot be trusted."
     Write-Note '  A failed command lists no migrations, which is indistinguishable'
@@ -246,7 +314,7 @@ if ($againCode -ne 0) {
     exit 1
 }
 
-$againNames = @([regex]::Matches((Redact $again), '(?m)\b(2026\d{10}_\w+\.sql)\b') |
+$againNames = @([regex]::Matches((Redact $again), '(?m)\b(\d{14}_\w+\.sql)\b') |
   ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
 if ($againNames.Count -ne 0) {
     Write-Bad "a second dry run still lists $($againNames.Count) migration(s): $($againNames -join ', ')"
@@ -256,10 +324,10 @@ if ($againNames.Count -ne 0) {
 Write-Good 'a second dry run lists nothing - the chain is fully applied'
 
 Write-Step 'expected post-apply state - run these in the staging SQL editor'
-Write-Host '   select count(*) from supabase_migrations.schema_migrations;                      -- expect 17'
+Write-Host '   select count(*) from supabase_migrations.schema_migrations;                      -- expect 20'
 Write-Host "   select count(*) from information_schema.tables where table_schema='public'`n     and table_type='BASE TABLE';                                              -- expect 19"
 Write-Host "   select count(*) from information_schema.views where table_schema='public';                                    -- expect  8"
-Write-Host "   select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace`n    where n.nspname='public' and p.proname like 'pf\_%';                           -- expect 47"
+Write-Host "   select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace`n    where n.nspname='public' and p.proname like 'pf\_%';                           -- expect 38"
 Write-Host '   select status, count(*) from branches group by status;                          -- expect NO ROWS'
 
 Write-Host ''

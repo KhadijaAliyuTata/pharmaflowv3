@@ -113,10 +113,10 @@ const alreadyMigrated = assessFreshness({
   publicViews: 8,
   migrationSchema: true,
   migrationTable: true,
-  migrationCount: 17,
+  migrationCount: 20,
   pfFunctions: 40,
 });
-report(!alreadyMigrated.fresh, '17 migrations recorded -> NOT FRESH');
+report(!alreadyMigrated.fresh, 'the full 20-migration chain recorded -> NOT FRESH');
 report(alreadyMigrated.problems.length >= 3, '  ...naming every reason', JSON.stringify(alreadyMigrated.problems));
 
 // Migration history present with records, but no public tables - an odd but

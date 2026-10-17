@@ -39,8 +39,9 @@ configuration problem instead.
 
 ## 3. Migration order
 
-`supabase/migrations/` — 15 files, applied in filename (timestamp) order. Never
-edit an applied migration; add a new one.
+`supabase/migrations/` — 20 files, applied in filename order. Ordering is
+lexicographic, not chronological (a version is an opaque sort key). Never edit an
+applied migration; add a new one.
 
 ```
 20261002160000_initial_schema.sql                     ← full schema, enums, RLS
@@ -50,18 +51,29 @@ edit an applied migration; add a new one.
 20261005190000_function_execute_hardening.sql         ← revoke EXECUTE from anon
 20261005210000_role_and_destructive_authorization.sql ← owner-only destructives
 20261005230000_receipt_pricing_authority.sql          ← receipt pricing guard
-20261005250000_branch_membership_role_authority.sql
-20261005260000_role_change_auditability.sql
-20261006090000_staff_invitations.sql
-20261006150000_staff_invitation_expiry.sql
-20261007120000_staff_invitation_claim.sql
-20261007130000_revoke_invitation_clears_claim.sql
-20261007140000_revoke_invitation_active_claim_only.sql
-20261012120000_authoritative_checkout.sql             ← UNCOMMITTED, not yet applied
+20261005250000_branch_membership_role_authority.sql   ← membership role authority
+20261005260000_role_change_auditability.sql           ← audited role changes
+20261006090000_staff_invitations.sql                  ← staff invitations
+20261006150000_staff_invitation_expiry.sql            ← invitation expiry
+20261007120000_staff_invitation_claim.sql             ← invitation claim
+20261007130000_revoke_invitation_clears_claim.sql     ← revoke clears claim
+20261007140000_revoke_invitation_active_claim_only.sql ← revocation scope
+20261012120000_authoritative_checkout.sql             ← authoritative checkout
+20261012130000_void_sale_restores_stock.sql           ← void sale restores stock
+20261012140000_platform_admin.sql                     ← platform admin surface
+20261012150000_redeem_invitation_idempotent.sql       ← redeem is idempotent
+20261012160000_redeem_invitation_check_order.sql      ← redeem checks order
+20261012170000_receive_stock.sql                      ← receiving write path
 ```
 
-**The last migration has never been applied to any database.** It is verified only
-against PGlite. Apply it to a staging project first, never straight to production.
+**None of these has ever been applied to any database.** They are verified only
+against PGlite. Apply them to a staging project first, never straight to
+production.
+
+> Two filenames, `20261005250000_branch_membership_role_authority.sql` and
+> `20261005260000_role_change_auditability.sql`, encode the impossible times
+> 25:00 and 26:00. They are lexicographic sort keys, not timestamps — see
+> `docs/STAGING-VALIDATION.md` §1.2.1. **Do not rename them.**
 
 Read-only inspection (safe):
 ```
@@ -89,7 +101,13 @@ Postgres and never touch the live database):
 bun run verify:db
 ```
 
-Expected: **ALL SUITES PASSED — 17 suites.**
+Expected when everything is green: `ALL SUITES PASSED — 19 suites`.
+
+**Latest known result (2026-10-17): 18 of 19 suites pass.** `verify-auth-modes.ts`
+fails; all other suites pass.
+
+(19 verification suites in `supabase/verify/` — a separate count from the 20 SQL
+migrations in `supabase/migrations/`.)
 
 Individual suites of interest:
 

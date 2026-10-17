@@ -97,7 +97,7 @@ Run these in order. All are safe and non-destructive.
 | Command | Expected | Proves |
 |---|---|---|
 | `bun run typecheck` | exit 0 | types intact |
-| `bun run verify:db` | **ALL SUITES PASSED — 17 suites** | schema, RLS, checkout, invitations |
+| `bun run verify:db` | **18 of 19 suites pass** (latest); `verify-auth-modes.ts` fails | schema, RLS, checkout, invitations |
 | `bun x vite build` | exit 0 | production Worker builds |
 
 Then confirm in the running app:
@@ -112,7 +112,7 @@ Then confirm in the running app:
 
 Checklist:
 
-- [ ] 17/17 verify suites pass
+- [ ] 19/19 verify suites pass
 - [ ] `typecheck` and `build` clean
 - [ ] real catalogue loads (not seed data)
 - [ ] `/pos` prices and completes a sale

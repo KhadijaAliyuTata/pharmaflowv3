@@ -4,8 +4,10 @@ Everything needed to validate the platform-admin work against a **staging**
 Supabase project. Nothing in this document has been executed. Every command is
 listed so it can be read, checked, and then run deliberately.
 
-**Status: staging project identified as `xnhsuifcbplnwtxnpedw`; configuration
-prepared; the first database action awaits approval.** See §2 and §3.
+**Status: the staging project is `xnhsuifcbplnwtxnpedw`; the recorded CLI link
+points at it; the configuration is verified locally. The staging database has not
+been migrated or validated, and the first database action awaits approval.** See
+§2 and §3.
 
 ---
 
@@ -13,7 +15,7 @@ prepared; the first database action awaits approval.** See §2 and §3.
 
 ### 1.1 The full chain
 
-There are 17 migrations. **None** has ever been applied to a real Postgres
+There are 20 migrations. **None** has ever been applied to a real Postgres
 server; all of them have only ever been verified against PGlite.
 
 | # | Migration | Lines | Applied anywhere? |
@@ -32,27 +34,36 @@ server; all of them have only ever been verified against PGlite.
 | 12 | `20261007120000_staff_invitation_claim.sql` | 150 | no |
 | 13 | `20261007130000_revoke_invitation_clears_claim.sql` | 72 | no |
 | 14 | `20261007140000_revoke_invitation_active_claim_only.sql` | 133 | no |
-| 15 | `20261012120000_authoritative_checkout.sql` | 675 | **no — untracked** |
-| 16 | `20261012130000_void_sale_restores_stock.sql` | 412 | **no — untracked** |
-| 17 | `20261012140000_platform_admin.sql` | 848 | **no — untracked** |
+| 15 | `20261012120000_authoritative_checkout.sql` | 675 | no |
+| 16 | `20261012130000_void_sale_restores_stock.sql` | 412 | no |
+| 17 | `20261012140000_platform_admin.sql` | 892 | no |
+| 18 | `20261012150000_redeem_invitation_idempotent.sql` | 177 | no |
+| 19 | `20261012160000_redeem_invitation_check_order.sql` | 162 | no |
+| 20 | `20261012170000_receive_stock.sql` | 294 | no |
 
-> The last three are untracked files, so a fresh clone does not contain them.
-> Pushing is required before a staging build is reproducible. **Not done — no
-> commit or push without approval.**
+> All 20 are tracked and committed. Earlier revisions of this document listed 17
+> and flagged the last three as untracked; that is no longer true, and the exact
+> chain is now pinned by `scripts/apply-staging-migrations.ps1` (an explicit
+> ordered list) and asserted against `supabase/migrations/` by
+> `scripts/selftest-dryrun-gate.mjs`.
 
 ### 1.2 Ordering
 
-Apply **all 17 in filename order**. Filename sort *is* the correct order.
+Apply **all 20 in filename order**. Filename sort *is* the correct order.
 
-Two constraints inside that order:
+Constraints inside that order:
 
-- **`pf_record_stock_movement` is defined twice.** `12120000` defines it, then
-  `12130000` defines it again with the `reference_id` fix. `12130000` supersedes
-  `12120000` and **must** run second. Timestamp order handles this.
-- **`pf_redeem_invitation` is defined three times**: `06090000`, then
-  `06150000`, then `12140000`. Same rule.
+- **`pf_record_stock_movement` is defined three times.** `04090000` defines it
+  first, then `12120000` defines it again, then `12130000` defines it a third time
+  with the `reference_id` fix. `12130000` supersedes the earlier two and **must**
+  run last. Timestamp order handles this.
+- **`pf_redeem_invitation` is defined five times**: `06090000`, then `06150000`,
+  then `12140000`, then `12150000` and `12160000`. The last, `12160000`, is the
+  effective version. Same rule.
+- **`12170000` adds one new function**, `pf_receive_stock`, and redefines nothing.
 
-The three newest migrations share **no** redefined functions with each other:
+The platform-admin batch, `12120000`–`12140000`, shares **no** redefined functions
+across its three files:
 
 | Redefined in `12140000` | Also in `12120000` / `12130000`? |
 |---|---|
@@ -68,6 +79,37 @@ overlap above. Filename order is correct and is what should be used.
 
 There are **no down migrations**. This is forward-only. A failed apply is
 recovered by dropping and recreating the staging database, not by rolling back.
+
+### 1.2.1 The two version strings that are not clock times
+
+`20261005250000_branch_membership_role_authority.sql` and
+`20261005260000_role_change_auditability.sql` decode as `2026-10-05 25:00:00`
+and `2026-10-05 26:00:00`. Hours 25 and 26 do not exist.
+
+They are **not timestamps and were never meant to be.** A migration version is
+an **opaque sort key**: the CLI orders migrations by filename, and
+`schema_migrations.version` is `text`, so ordering is lexicographic, not
+chronological. `20261005250000` sorts after `20261005230000` and before
+`20261006090000`, which is exactly where these two files have to run.
+
+They are numbered this way on purpose. Both were written after
+`20261005230000_receipt_pricing_authority.sql` already existed, and inserting a
+migration between two committed ones without editing either of them means
+choosing a key that sorts between their two keys. `…240000`/`…245000` would have
+worked equally well; `…250000`/`…260000` were picked and are harmless. Nothing in
+this repository parses a version as a date.
+
+**Do not rename them.** Two structural reasons:
+
+- The chain is forward-only. `20261005250000` is referred to by name in the
+  header of `20261005260000` and in comments in `supabase/verify/verify-role-audit.mjs`,
+  `verify-role-authority.mjs`, `verify-platform-admin.mjs` and
+  `src/lib/supabase/tenant.ts`. A rename would make those references wrong.
+- Renaming a migration that has already been applied creates a version the
+  `schema_migrations` history has never seen, so the next `db push` would apply
+  it a second time. Nothing has been applied anywhere yet, so this is currently a
+  latent risk rather than an active one — which is exactly why it must not be
+  "tidied up" before the first apply.
 
 ### 1.3 What `12140000` depends on
 
@@ -185,7 +227,7 @@ first migration.
 It should work: `pgcrypto` is a *trusted* extension, so the database owner may
 install it, and the session pooler connects as `postgres`. But if Supabase has it
 disabled or pre-installed elsewhere it will fail, and it will fail on migration
-**1 of 17**.
+**1 of 20**.
 
 **If it fails**, nothing is lost — `db push` runs each migration in its own
 transaction, so the failure leaves an empty database. Fix it by installing the
@@ -228,23 +270,25 @@ regardless of where pgcrypto installed. **No exposure.**
 
 #### Ordering constraints inside the chain
 
-Filename order is the correct order, and it is the order these run in. Three
+Filename order is the correct order, and it is the order these run in. Four
 functions are defined more than once, and the **last** definition wins:
 
 | Function | Defined in | Effective version |
 |---|---|---|
 | `pf_record_stock_movement` | `04090000`, `12120000`, `12130000` | **`12130000`** |
-| `pf_redeem_invitation` | `06090000`, `06150000`, `12140000` | **`12140000`** |
+| `pf_redeem_invitation` | `06090000`, `06150000`, `12140000`, `12150000`, `12160000` | **`12160000`** |
 | `pf_revoke_invitation` | `06090000`, `07130000`, `07140000` | **`07140000`** |
 | `pf_set_active_branch` | `04090000`, `12140000` | **`12140000`** |
 
 `07130000` drops **and** recreates `pf_revoke_invitation` (L22 → L24) and re-grants
 it (L72), so the chain is self-consistent at every point.
 
-`pharmacy_status` is created in `12140000` and referenced **only** in that same
-migration (17 uses, zero in the other 16). The platform-admin work is therefore
-entirely self-contained at the end of the chain — it cannot break anything
-earlier, and nothing earlier can break it.
+`pharmacy_status` is created in `12140000` and referenced only inside the
+platform-admin work and the two migrations that supersede its
+`pf_redeem_invitation` (`12150000`, `12160000`, which carry the same
+`branches.status` writes forward) — nowhere else in the chain. The platform-admin
+work is therefore self-contained: it cannot break anything earlier, and nothing
+earlier can break it.
 
 #### Completeness, verified mechanically
 
@@ -321,19 +365,24 @@ The same reasoning is why `pf_create_pharmacy` and `pf_set_pharmacy_status` take
 | Supabase CLI has a `--config` flag | **no** — verified, see §2.4 |
 | `supabase/.temp/project-ref` present | **yes** |
 | `supabase/config.toml` has `project_id` | **yes** |
-| `.temp/project-ref` matches `config.toml` | **yes** |
-| `.env` `PUBLIC_SUPABASE_URL` project ref matches the linked ref | **yes** |
+| `.temp/project-ref` matches `config.toml` | **no** — it points at the staging project; `config.toml` carries production |
+| `.env` `PUBLIC_SUPABASE_URL` project ref matches the linked ref | **no** — `.env` names the deployed app's project; the two differ |
 | `.env.staging`, `.env.local`, `.env.*.local` | **none exist** |
 | Staging project reference supplied | `xnhsuifcbplnwtxnpedw` |
-| That ref is distinct from production, from `config.toml`, and from the CLI link | **yes, all three** |
+| That ref is distinct from production and from `config.toml`, and equal to the recorded CLI link | **yes** |
 
 ### 2.2 Conclusion
 
-> **The Supabase CLI is linked to the same project the deployed app talks to.**
-> Running `supabase db push` or `supabase migration up` right now would apply all
-> 17 migrations to **the live database**. That is production. Stopped.
+> **The recorded CLI link points at the staging project
+> (`xnhsuifcbplnwtxnpedw`).** A bare `supabase db push` would therefore target
+> **staging**, not production. The approved commands still pass the target
+> explicitly (`--db-url` + `--workdir .`), so they never consult the link.
+>
+> The staging database has **not** been migrated or validated. This section proves
+> the *configuration* only.
 
-I have not printed the project reference, the pooler URL, or anything in `.env`.
+I have not printed the production project reference, the pooler URL, or anything
+in `.env`.
 
 `.env` holds only the four `PUBLIC_*` variables (plus `PUBLIC_DEMO_MODE`). There is
 no service-role key locally — it lives only as a Worker secret. So local
@@ -347,19 +396,22 @@ supply.
 | **Staging project ref** | `xnhsuifcbplnwtxnpedw` |
 | Recorded in | `supabase/config.staging.toml` (`project_id`) |
 | Distinguished from production | yes — verified locally, no network |
-| CLI linked to it | **no, deliberately** |
+| CLI linked to it | **yes** — `supabase/.temp/project-ref` records this ref |
 
-### 2.4 Why the CLI link was NOT changed
+### 2.4 Why the CLI link points at staging
 
-`supabase/.temp/project-ref` still points at production, and
-`supabase/config.toml` still carries the production `project_id`.
+`supabase/.temp/project-ref` records the staging ref
+(`xnhsuifcbplnwtxnpedw`). `supabase/config.toml` still carries the production
+`project_id`; the approved commands never use it to choose a remote.
 
-Two tempting approaches were rejected:
-
-**Relinking the CLI to staging** would make the next bare `supabase db push`
-silently target staging. That protects staging and endangers production — a
-developer who means to deploy production would hit staging and might not notice.
-The link is shared state, so it cannot be safe for two targets at once.
+The link is shared state, so it cannot be right for a staging push and a
+production push at the same time. It points at staging deliberately, because that
+is the safer of the two mistakes: a bare `supabase db push` aimed at staging is
+recoverable, while one aimed at production is not.
+`scripts/verify-staging-target.mjs` enforces the choice — it **fails** unless the
+recorded link equals the staging ref, so an absent link, a production link, or any
+unexpected project stops the run. Isolation still comes from passing the target
+explicitly (below).
 
 **A `config.staging.toml` that the CLI reads.** It does not. Verified against
 v2.119.0:
@@ -449,11 +501,12 @@ it — invitation mail then looks identical to real mail to a recipient.
 
 ## 3. Exact commands — **not run, awaiting approval**
 
-> ### ⚠️ A bare `supabase db push` in this repository targets PRODUCTION
+> ### ⚠️ A bare `supabase db push` in this repository targets STAGING
 >
-> `supabase/.temp/project-ref` points at production and has deliberately not been
-> changed. Every command below therefore passes `--db-url` explicitly.
-> `supabase db push` with **no flags** is the dangerous command, not the safe one.
+> `supabase/.temp/project-ref` points at the staging project. Every command below
+> still passes `--db-url` explicitly, so it never consults the link.
+> `supabase db push` with **no flags** is the unpredictable command, not the safe
+> one: it follows the link, whatever the link happens to be that day.
 
 ### 3.1 Pre-flight A — configuration only, no network, safe to run now
 
@@ -462,9 +515,9 @@ bun scripts/verify-staging-target.mjs
 ```
 
 Reads four local files and opens no connection. Exits `0` only if the staging ref
-is well formed, matches `config.staging.toml`, and differs from production in
-`config.toml`, in `.env`, and in the recorded CLI link. It prints the
-production-push hazard on every run. **Verified passing.**
+is well formed, matches `config.staging.toml`, differs from production in
+`config.toml` and in `.env`, and **equals the recorded CLI link**. It prints the
+bare-push hazard on every run. **Verified passing** (exit `0`; link = staging).
 
 ### 3.2 Pre-flight B — the connection, and the credential
 
@@ -593,9 +646,10 @@ The pre-apply gate is the deliberate inverse: only `0` passes there.
 
 #### Why the second dry run checks its own exit code
 
-The pre-apply dry run requires **exactly 17** pending migrations, so an errored
-command yields 0 and is caught by the count. The post-apply check is the
-inverse - it requires **zero** - and a dry run that *fails* also names zero.
+The pre-apply dry run requires **the exact expected set of 20** pending
+migrations, in order, so an errored command names nothing and is caught by that
+comparison. The post-apply check is the inverse - it requires **zero** - and a
+dry run that *fails* also names zero.
 
 Counting names alone therefore reported success on a second dry run that never
 ran, and printed "Identity and history checks passed." having verified nothing.
@@ -662,7 +716,7 @@ fabricated inputs:
 - **`assessFreshness`, fresh states (4):** no `supabase_migrations` schema ·
   schema without table · `schema_migrations` present and empty · views-only,
   which must stay fresh but be reported
-- **`assessFreshness`, must-fail states (4):** 17 migrations recorded · records
+- **`assessFreshness`, must-fail states (4):** 20 migrations recorded · records
   with no tables · stray `pf_*` functions · tables with no history
 - **`classifyError` (7):** `42P01` is *catalog*, never auth or network
 - **Wrong-target refusal, end to end (9):** production in a pooler username ·
@@ -677,7 +731,7 @@ fabricated inputs:
 supabase --workdir . db push --dry-run --db-url $env:PGURI --skip-vault
 ```
 
-Expected: the **17 migrations** listed as pending, resolved from
+Expected: the **20 migrations** listed as pending, resolved from
 `supabase/migrations/` — which `--workdir .` pins explicitly, with no ancestor
 search. Nothing is applied.
 
@@ -685,7 +739,7 @@ search. Nothing is applied.
 
 | In the output | Meaning |
 |---|---|
-| fewer than 17 | some migration is not being picked up — investigate before applying |
+| fewer than 20 | some migration is not being picked up — investigate before applying |
 | "remote migration versions not found in local migrations directory" | the target already has history this chain does not know about |
 | any mention of the production project | the target is wrong — stop |
 | a list of migrations *already applied* | you are pointed at a migrated database |
@@ -716,18 +770,18 @@ supabase --workdir . db push --dry-run --db-url $env:PGURI --skip-vault
 
 **Expected effects, precisely.**
 
-*During:* each of the 17 migrations runs in its own transaction. If one fails,
-that migration rolls back and the earlier 16 stand. Staging ends up partially
+*During:* each of the 20 migrations runs in its own transaction. If one fails,
+that migration rolls back and the earlier 19 stand. Staging ends up partially
 migrated, and the failure message names the statement.
 
 *After a full success:*
 
 | | |
 |---|---|
-| `supabase_migrations.schema_migrations` | created, **17 rows** |
+| `supabase_migrations.schema_migrations` | created, **20 rows** |
 | tables in `public` | **19** |
 | views in `public` | **8** (4 cost, `pf_my_branches`, 3 `pf_platform_*`) |
-| `pf_*` functions in `public` | **47** (before it was 0) |
+| `pf_*` functions in `public` | **38** (before it was 0) |
 | enums | **11**, including the new `pharmacy_status` |
 | data rows | **0** — no migration seeds anything |
 
@@ -735,14 +789,14 @@ migrated, and the failure message names the statement.
 staging, or the read-only script:
 
 ```sql
-select count(*) as migrations from supabase_migrations.schema_migrations;   -- 17
+select count(*) as migrations from supabase_migrations.schema_migrations;   -- 20
 select count(*) as tables     from information_schema.tables
   where table_schema = 'public' and table_type = 'BASE TABLE';             -- 19
 select count(*) as views      from information_schema.views
   where table_schema = 'public';                                           -- 8
 select count(*) as pf_fns     from pg_proc p
   join pg_namespace n on n.oid = p.pronamespace
-  where n.nspname = 'public' and p.proname like 'pf\_%';                   -- 47
+  where n.nspname = 'public' and p.proname like 'pf\_%';                   -- 38
 select status, count(*) from branches group by status;                     -- no rows
 ```
 
@@ -750,7 +804,7 @@ select status, count(*) from branches group by status;                     -- no
 correct — `branches` exists but is empty, because no migration seeds a pharmacy.
 
 > `--include-all` exists for pushing migrations missing from the remote history
-> table. **Do not add it on the first run.** All 17 are new to staging, so the
+> table. **Do not add it on the first run.** All 20 are new to staging, so the
 > plain command should already list all of them; if it does not, that is a signal
 > to stop and investigate, not a flag to reach for.
 
@@ -1066,7 +1120,7 @@ Roughly, so the cost is known before committing to it:
    change** in the harness and may surface genuine new failures.
 4. `gen_random_uuid()` would come from real `pgcrypto`; the substitution must be
    disabled on that path, or tokens are not what they would be in production.
-5. Suites must target a **disposable** database. Applying the full 17-migration
+5. Suites must target a **disposable** database. Applying the full 20-migration
    chain per suite group needs 15 clean databases, or a reset function between
    them.
 
@@ -1119,15 +1173,15 @@ Tracked as separate follow-up work.
 
 | # | Blocker | Severity | Who |
 |---|---|---|---|
-| 1 | **No staging Supabase project exists.** The CLI is linked to the live project | **hard stop** | you — §2.3 |
+| 1 | ~~No staging Supabase project exists~~ **resolved** — staging is `xnhsuifcbplnwtxnpedw`, the CLI link points at it, and `config.staging.toml` records it. The database itself is still unmigrated and unvalidated | none | §2, §3 |
 | 2 | No staging Worker / Worker environment | **hard stop** | you — §2.3 step 6 |
 | 3 | No harness adapter for real Postgres | high | separate task — §6.3 |
 | 4 | `PUBLIC_APP_URL` match between `.env` and the Worker secret unverified | medium | staging only — E2 |
 | 5 | `pf_grant_platform_admin` under the new API key format unverified | medium | staging first - §3.5 step 4 |
 | 6 | `pf_void_sale` and `pf_revoke_invitation` under suspension have no assertion | low | optional on staging |
-| 7 | Migrations 15–17 are untracked; a clean clone lacks them | low | needs a commit, which needs approval |
+| 7 | ~~Migrations 15–17 are untracked~~ **resolved** — all 20 files are tracked and committed | none | done |
 | 8 | Concurrency (`for update`) never exercised | medium | staging only — §5.4 |
 
 **Nothing here was executed.** No migration applied, no deploy, no commit, no
-push, no secret touched, no platform-admin role granted. HEAD is still `922da67`
-with 0 staged; all 17 modified and 27 untracked files are intact.
+push, no secret touched, no platform-admin role granted. The 20-migration chain
+has still never been applied to any Postgres server.
