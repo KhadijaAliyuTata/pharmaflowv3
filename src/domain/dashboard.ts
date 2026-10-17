@@ -542,9 +542,10 @@ export const EMPTY_LEDGER_FILTER: LedgerFilter = {
 /**
  * The audit ledger, filtered. Newest first.
  *
- * Reads `state.auditEvents` — the single audit record the whole app already
- * writes to. There is deliberately no second log: a second one would be a second
- * answer to "who did what", and the two would drift.
+ * A pure filter over whatever the caller supplies — the seeded log in demo mode,
+ * the live `audit_events` read in live mode (`useAuditEvents`). There is
+ * deliberately no second log: a second one would be a second answer to "who did
+ * what", and the two would drift.
  */
 export function operationalActivities(
   events: AuditEvent[],

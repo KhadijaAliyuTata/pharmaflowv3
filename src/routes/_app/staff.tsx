@@ -56,6 +56,7 @@ import { formatRelative } from '~/domain/money';
 import { ACTION_LABEL, ACTION_TONE } from '~/domain/audit-labels';
 import type { StaffRole } from '~/lib/db.types';
 import { invitationLink } from '~/lib/join-link';
+import { useAuditEvents } from '~/hooks/use-audit-events';
 import { useIsOwner } from '~/hooks/use-is-owner';
 import { useStaff } from '~/hooks/use-staff';
 import { usePharmacy } from '~/store/pharmacy';
@@ -85,7 +86,7 @@ function initials(name: string): string {
 }
 
 function StaffScreen() {
-  const events = usePharmacy((state) => state.auditEvents);
+  const { events, loading: auditLoading, error: auditError } = useAuditEvents();
   const currentUser = usePharmacy((state) => state.currentUser);
 
   // Authoritative: `pf_is_owner()` resolves `branch_memberships.role`. The old
@@ -121,10 +122,11 @@ function StaffScreen() {
 
   // v2 stored the audit array twice, under auditLogs and auditEvents. One source.
   //
-  // A real seam, and worth naming: the audit log still comes from the store while
-  // the team comes from Supabase. `audit_events` exists and the database writes it,
-  // but it is not yet the source for this screen, so the two are not joined - the
-  // actor filter still matches on display name, exactly as before.
+  // The audit log now comes from `audit_events` in live mode (`useAuditEvents`)
+  // and the seeded array in demo mode, so the seam this comment used to name —
+  // a store log beside a Supabase team — is closed. The actor filter still
+  // matches on display name: the log embeds the actor's profile, but the two
+  // lists are not joined by id, exactly as before.
   const filtered = useMemo(
     () =>
       events.filter(
@@ -368,7 +370,13 @@ function StaffScreen() {
         </CardHeader>
 
         <CardContent>
-          {filtered.length === 0 ? (
+          {auditError ? (
+            <p role="alert" className="py-8 text-center text-sm text-muted-foreground">
+              {auditError}
+            </p>
+          ) : auditLoading && events.length === 0 ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">Loading the audit log…</p>
+          ) : filtered.length === 0 ? (
             <p className="py-8 text-center text-sm text-muted-foreground">
               No audit events match those filters.
             </p>

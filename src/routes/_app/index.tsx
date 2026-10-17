@@ -60,6 +60,7 @@ import {
   type LedgerFilter,
 } from '~/domain/dashboard';
 import { dashboardSnapshot, reorderSuggestions } from '~/domain/selectors';
+import { useAuditEvents } from '~/hooks/use-audit-events';
 import { useMedicines } from '~/hooks/use-medicines';
 import { useIsOwner } from '~/hooks/use-is-owner';
 import { useSales } from '~/hooks/use-sales';
@@ -133,7 +134,15 @@ function Dashboard() {
   // The ledger from Supabase in live mode, the seeded sales in demo mode. Empty
   // and flagged while it loads or if it fails, never the prototype's receipts.
   const { sales, loading: salesLoading, error: salesError } = useSales();
-  const auditEvents = usePharmacy((state) => state.auditEvents);
+  // The audit log follows the same rule: one source per mode, empty and flagged
+  // on load or failure, never the prototype's approvals and voidings.
+  // `audit_read` is owner-only, so an assistant's read is empty rather than an
+  // error.
+  const {
+    events: auditEvents,
+    loading: auditLoading,
+    error: auditError,
+  } = useAuditEvents();
   const medicineRequests = usePharmacy((state) => state.medicineRequests);
   const users = usePharmacy((state) => state.users);
   const user = useCurrentUser();
@@ -426,7 +435,15 @@ function Dashboard() {
           </SectionTitle>
         </CardHeader>
         <CardContent className="px-0">
-          {recentActivity.length === 0 ? (
+          {auditError ? (
+            <p role="alert" className="px-4 py-8 text-center text-sm text-muted-foreground">
+              {auditError}
+            </p>
+          ) : auditLoading && recentActivity.length === 0 ? (
+            <p className="px-4 py-8 text-center text-sm text-muted-foreground">
+              Loading activity…
+            </p>
+          ) : recentActivity.length === 0 ? (
             <p className="px-4 py-8 text-center text-sm text-muted-foreground">
               No activity recorded yet.
             </p>

@@ -93,8 +93,10 @@ export type {
 export {
   createCustomer,
   getMyCustomerRecord,
-  listAuditEvents,
   listCustomers,
   listSuppliers,
-  recordAuditEvent,
 } from './parties';
+
+export { listAuditEvents, recordAuditEvent } from './audit';
+
+export type { AuditActor, AuditEventWithActor } from './audit';
