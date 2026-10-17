@@ -25,13 +25,36 @@ import {
   SectionTitle,
   StatTile,
 } from '~/components/app/primitives';
+import { PilotNotice } from '~/components/app/pilot-notice';
 import { formatRelative, formatWhen } from '~/domain/money';
 import type { CustomerOrder, MedicineRequest } from '~/domain/types';
+import { isDemoMode } from '~/lib/session';
 import { usePharmacy } from '~/store/pharmacy';
 
 export const Route = createFileRoute('/_app/orders')({
-  component: OrdersScreen,
+  component: OrdersRoute,
 });
+
+/**
+ * Live builds do not serve this screen.
+ *
+ * It is built on `state.customerOrders` and `state.medicineRequests`, and
+ * nothing writes either table in the live database yet — order and request
+ * capture is Tier 8 in docs/LIVE-DATA-PLAN.md. Against an empty store the screen
+ * would show a confident "0 open orders" over a pharmacy that may have plenty.
+ * The gate sits above `OrdersScreen`, so its hooks never mount and no query runs.
+ */
+function OrdersRoute() {
+  if (!isDemoMode()) {
+    return (
+      <PilotNotice
+        title="Online Orders"
+        description="Customer orders and the requests behind them are not recorded in the pharmacy database yet, so this deployment does not serve the screen. It returns with order capture."
+      />
+    );
+  }
+  return <OrdersScreen />;
+}
 
 const URGENCY: Record<
   MedicineRequest['urgency'],

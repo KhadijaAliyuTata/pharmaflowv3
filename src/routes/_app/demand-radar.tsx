@@ -20,8 +20,10 @@ import {
   TableRow,
 } from '~/components/ui/table';
 import { PageHeader, SectionTitle, StatTile } from '~/components/app/primitives';
+import { PilotNotice } from '~/components/app/pilot-notice';
 import { demandRadar, demandRadarSummary } from '~/domain/dashboard';
 import { useMedicines } from '~/hooks/use-medicines';
+import { isDemoMode } from '~/lib/session';
 import { usePharmacy } from '~/store/pharmacy';
 
 /**
@@ -49,8 +51,29 @@ import { usePharmacy } from '~/store/pharmacy';
  * would be a plausible-sounding fiction. It is left out on purpose.
  */
 export const Route = createFileRoute('/_app/demand-radar')({
-  component: DemandRadarScreen,
+  component: DemandRadarRoute,
 });
+
+/**
+ * Live builds do not serve this screen.
+ *
+ * Demand Radar is powered entirely by `state.medicineRequests`, and nothing
+ * writes `medicine_requests` in the live database yet — request capture is Tier 8
+ * in docs/LIVE-DATA-PLAN.md. Empty here would read as "no customer asked for
+ * anything", which is a claim the data cannot support. The gate sits above
+ * `DemandRadarScreen`, so its hooks never mount.
+ */
+function DemandRadarRoute() {
+  if (!isDemoMode()) {
+    return (
+      <PilotNotice
+        title="Demand Radar"
+        description="Demand Radar is built from recorded customer requests, and nothing writes requests to the pharmacy database yet, so this deployment does not serve the screen. It returns with request capture."
+      />
+    );
+  }
+  return <DemandRadarScreen />;
+}
 
 const URGENCY_VARIANT = {
   emergency: 'destructive',

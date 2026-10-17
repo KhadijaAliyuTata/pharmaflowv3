@@ -20,6 +20,7 @@ import {
   TableRow,
 } from '~/components/ui/table';
 import { MaybeMoney, Money, PageHeader, Percent, SectionTitle, StatTile } from '~/components/app/primitives';
+import { PilotNotice } from '~/components/app/pilot-notice';
 import { add, formatDate, formatNaira, formatPercent, percentOf } from '~/domain/money';
 import { dailyRevenue, marginPercent, summariseSales, unitMargin } from '~/domain/selectors';
 import {
@@ -29,6 +30,7 @@ import {
   type ReportPeriod,
 } from '~/domain/dashboard';
 import type { Medicine } from '~/domain/types';
+import { isDemoMode } from '~/lib/session';
 import { useCurrentUser, usePharmacy } from '~/store/pharmacy';
 import { useMedicines } from '~/hooks/use-medicines';
 import { useIsOwner } from '~/hooks/use-is-owner';
@@ -45,8 +47,31 @@ export const Route = createFileRoute('/_app/reports')({
         : 'all',
     };
   },
-  component: ReportsScreen,
+  component: ReportsRoute,
 });
+
+/**
+ * Live builds do not serve this screen.
+ *
+ * Reports still reads `state.sales`, the demo's local ledger, rather than the
+ * live one. Live sales are in `sales`/`sale_items` and are read by `useSales`
+ * (Tier 1, docs/LIVE-DATA-PLAN.md); until this screen reads that, a live build
+ * would present real revenue, margin and cost-of-goods figures derived from an
+ * empty local array — zeros shown as the pharmacy's performance. The live figures
+ * are on Sales. The gate sits above `ReportsScreen`, so `useMedicines` and its
+ * query never mount.
+ */
+function ReportsRoute() {
+  if (!isDemoMode()) {
+    return (
+      <PilotNotice
+        title="Reports"
+        description="Reports still reads the demo's local sales ledger rather than the live one, so this deployment does not serve the screen. The live figures are on Sales; this returns once Reports reads them."
+      />
+    );
+  }
+  return <ReportsScreen />;
+}
 
 const REVENUE_CONFIG = {
   revenue: { label: 'Revenue', color: 'var(--chart-2)' },

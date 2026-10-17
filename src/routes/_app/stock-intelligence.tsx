@@ -30,16 +30,40 @@ import {
 } from '~/components/ui/table';
 import { Tabs, TabsList, TabsTrigger } from '~/components/ui/tabs';
 import { MaybeMoney, Money, PageHeader, SectionTitle, StatTile } from '~/components/app/primitives';
+import { PilotNotice } from '~/components/app/pilot-notice';
 import { formatCount, sumKnown } from '~/domain/money';
 import { reorderSuggestions, sellableQuantity, stockValue } from '~/domain/selectors';
 import type { ReorderPriority, ReorderSuggestion } from '~/domain/types';
 import { useMedicines } from '~/hooks/use-medicines';
 import { useIsOwner } from '~/hooks/use-is-owner';
+import { isDemoMode } from '~/lib/session';
 import { usePharmacy } from '~/store/pharmacy';
 
 export const Route = createFileRoute('/_app/stock-intelligence')({
-  component: StockIntelligence,
+  component: StockIntelligenceRoute,
 });
+
+/**
+ * Live builds do not serve this screen.
+ *
+ * Reorder suggestions are built from daily sales velocity (`reorderSuggestions`)
+ * and supplier lead times; velocity is not measured in the live database yet, and
+ * supplier names come from `state.suppliers`, which is empty there. A queue
+ * derived from neither would look authoritative and be wrong. Tier 6 in
+ * docs/LIVE-DATA-PLAN.md. The gate sits above `StockIntelligence`, so `useMedicines`
+ * and its query never mount.
+ */
+function StockIntelligenceRoute() {
+  if (!isDemoMode()) {
+    return (
+      <PilotNotice
+        title="Stock intelligence"
+        description="Reorder suggestions need measured sales velocity, which the live database does not have yet, so this deployment does not serve the screen. The live catalogue is on Inventory; this returns once velocity is measured."
+      />
+    );
+  }
+  return <StockIntelligence />;
+}
 
 const PRIORITIES: ReorderPriority[] = ['urgent', 'soon', 'watch', 'overstock'];
 

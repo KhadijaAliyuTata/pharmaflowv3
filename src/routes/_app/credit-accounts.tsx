@@ -36,15 +36,38 @@ import {
   SectionTitle,
   StatTile,
 } from '~/components/app/primitives';
+import { PilotNotice } from '~/components/app/pilot-notice';
 import { formatDate, formatNaira, formatWhen, money, percentOf, subtract, sum } from '~/domain/money';
 import { creditAccountsOverLimit } from '~/domain/operations';
 import type { CreditAccount } from '~/domain/types';
 import { useIsOwner } from '~/hooks/use-is-owner';
+import { isDemoMode } from '~/lib/session';
 import { usePharmacy, usePharmacyActions } from '~/store/pharmacy';
 
 export const Route = createFileRoute('/_app/credit-accounts')({
-  component: CreditAccountsScreen,
+  component: CreditAccountsRoute,
 });
+
+/**
+ * Live builds do not serve this screen.
+ *
+ * It reads `state.creditAccounts`, which is empty in a live build, and the live
+ * credit read (Tier 5, docs/LIVE-DATA-PLAN.md) is deferred for this pilot. A
+ * ledger screen showing every customer at zero owed would be worse than absent:
+ * it is money, and it would be wrong. The gate sits above `CreditAccountsScreen`,
+ * so its hooks never mount.
+ */
+function CreditAccountsRoute() {
+  if (!isDemoMode()) {
+    return (
+      <PilotNotice
+        title="Credit Accounts"
+        description="Credit accounts are deferred for this pilot, so this deployment does not serve the screen. No live credit ledger is shown yet."
+      />
+    );
+  }
+  return <CreditAccountsScreen />;
+}
 
 const ACCOUNT_TYPE: Record<CreditAccount['type'], string> = {
   school: 'School',

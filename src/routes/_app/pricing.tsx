@@ -25,6 +25,7 @@ import {
   StatusBadge,
 } from '~/components/app/primitives';
 import { UnitEditor } from '~/components/app/unit-editor';
+import { PilotNotice } from '~/components/app/pilot-notice';
 import { margin, money, multiply, subtract } from '~/domain/money';
 import {
   hasCost,
@@ -36,13 +37,35 @@ import {
 } from '~/domain/selectors';
 import { useMedicines } from '~/hooks/use-medicines';
 import { useIsOwner } from '~/hooks/use-is-owner';
+import { isDemoMode } from '~/lib/session';
 import { usePharmacy, usePharmacyActions } from '~/store/pharmacy';
 import type { Result } from '~/domain/operations';
 import type { Medicine, StockReceipt } from '~/domain/types';
 
 export const Route = createFileRoute('/_app/pricing')({
-  component: Pricing,
+  component: PricingRoute,
 });
+
+/**
+ * Live builds do not serve this screen.
+ *
+ * The approval queue is `state.stockReceipts` filtered to `pending_pricing`, and
+ * receiving has no live write path yet — Tier 7 in docs/LIVE-DATA-PLAN.md. A live
+ * build would therefore show "nothing to approve" permanently, which is not the
+ * same as "everything is priced". The gate sits above `Pricing`, so its hooks
+ * never mount.
+ */
+function PricingRoute() {
+  if (!isDemoMode()) {
+    return (
+      <PilotNotice
+        title="Pricing"
+        description="The pricing queue fills from stock receipts, and receiving has no live write path yet, so this deployment does not serve the screen. It returns with stock receiving."
+      />
+    );
+  }
+  return <Pricing />;
+}
 
 function Pricing() {
   // Catalogue from Supabase in live mode; useMedicines has no local
