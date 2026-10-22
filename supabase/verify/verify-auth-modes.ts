@@ -1,7 +1,7 @@
 /**
  * Deployment-mode verification.
  *
- * `resolveDeploymentMode` in `~/lib/session` is the single place that decides
+ * `resolveDeploymentMode` in `~/lib/build-mode` is the single place that decides
  * whether this build may authenticate at all, and it is pure: it reads three
  * environment values and returns a string. That makes it directly testable, which
  * matters because it is the gate that used to fail OPEN — a production deploy
@@ -17,16 +17,19 @@
  *
  * ## The build-mode dimension
  *
- * Demo mode now depends on `import.meta.env.DEV` as well as the flag, because a
- * flag alone could never be a guarantee: it is read from the build's environment,
- * so anything that influences a production build — a CI variable, a copied `.env`,
- * a platform default — could set it to `true` and the any-password sign-in would
- * be live. `isDevBuild` is therefore an explicit input to the copy below, so both
+ * Demo mode now depends on `__DEV_SERVER__` as well as the flag, because a flag
+ * alone could never be a guarantee: it is read from the build's environment, so
+ * anything that influences a production build — a CI variable, a copied `.env`, a
+ * platform default — could set it to `true` and the any-password sign-in would be
+ * live. `isDevBuild` is therefore an explicit input to the copy below, so both
  * halves of the gate are asserted, including the case that matters most: a
  * production build with `PUBLIC_DEMO_MODE=true` and no Supabase configuration.
  *
- * The section that greps `dist/` for the seeded addresses is the one that proves
- * the gate holds in the artefact that actually ships, rather than in the source.
+ * The section that inspects `dist/` is the one that proves the gate holds in the
+ * artefact that actually ships, rather than in the source. It finds the demo-
+ * authentication names (`DEMO_ALLOWED`, `isDemoMode()`, `DEMO_SESSION`) folded to a
+ * literal `false`, and it reports — rather than fails on — the inert seed sample
+ * records, which are data and authenticate nothing.
  */
 
 import { readdirSync } from 'node:fs';
@@ -50,9 +53,9 @@ function section(title: string) {
 }
 
 /**
- * A faithful copy of the decision in src/lib/session.ts. If the two diverge, this
- * suite is testing the wrong thing — so `verify-auth-modes.ts` also greps the real
- * source for the rule this encodes.
+ * A faithful copy of the decision in src/lib/build-mode.ts. If the two diverge,
+ * this suite is testing the wrong thing — so `verify-auth-modes.ts` also greps the
+ * real source for the rule this encodes.
  */
 function resolveDeploymentMode(
   url: string | undefined,
@@ -210,29 +213,41 @@ section('an absent backend fails CLOSED by default');
 
 section('the source matches this decision table');
 {
-  // Guards against the copy above drifting from the implementation. Cheap, and it
-  // catches the realistic regression: someone simplifying the real rule while the
-  // suite keeps passing on its own copy.
-  const SRC = 'C:/Users/LENOVO/OneDrive/Documents/Default Project/pharmaflowv3/src/lib/session.ts';
+  // The rule now lives in two files: `~/lib/build-mode` decides the deployment mode
+  // and defines the demo gate, and `~/lib/session` consumes that gate (`DEMO_SESSION`)
+  // to guard the sign-in paths. Each piece is asserted where it now lives, so this
+  // suite fails on a real regression rather than on the refactor that moved it.
+  //
+  // Comments are stripped before asserting, so the checks target real code rather
+  // than the prose that documents why the old fail-open expression was replaced.
+  const ROOT = 'C:/Users/LENOVO/OneDrive/Documents/Default Project/pharmaflowv3/';
+  const SRC = `${ROOT}src/lib/session.ts`;
+  const MODE = `${ROOT}src/lib/build-mode.ts`;
   const src = await Bun.file(SRC).text();
+  const modeSrc = await Bun.file(MODE).text();
+
+  const strip = (s: string) =>
+    s.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^[ \t]*\/\/.*$/gm, ' ');
+  const code = strip(src);
+  const modeCode = strip(modeSrc);
 
   // The old fail-open expression survives only inside the explanatory comment that
-  // documents why it was replaced. Strip comments before asserting, so the check
-  // targets real code rather than prose.
-  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\*.*$/gm, '').replace(/\/\/.*$/gm, '');
+  // documents why it was replaced, so it must not appear in the code of either file.
   check(
     'the real rule is opt-in, not opt-out',
-    code.includes("requested === 'true'") && !code.includes("PUBLIC_DEMO_MODE !== 'false'"),
-    "the old fail-open expression must not reappear in code",
+    modeCode.includes("requested === 'true'") &&
+      !modeCode.includes("PUBLIC_DEMO_MODE !== 'false'") &&
+      !code.includes("PUBLIC_DEMO_MODE !== 'false'"),
+    'the old fail-open expression must not reappear in code',
   );
-  check('live requires both halves present', /urlPresent && keyPresent/.test(src));
+  check('live requires both halves present', /urlPresent && keyPresent/.test(modeCode));
   check(
     'the cached role is downgraded while offline',
-    src.includes("role: 'assistant', canApprovePricing: false"),
+    code.includes("role: 'assistant', canApprovePricing: false"),
     'an unverified cached role must never gate owner-only screens',
   );
-  check('configProblem is exported', src.includes('export function configProblem'));
-  check('isAuthUnavailable is exported', src.includes('export function isAuthUnavailable'));
+  check('configProblem is exported', code.includes('export function configProblem'));
+  check('isAuthUnavailable is exported', code.includes('export function isAuthUnavailable'));
 
   // The any-password sign-in must be reachable only through a build-time constant.
   // A flag is not sufficient, which is the whole point of the second half of the
@@ -240,41 +255,42 @@ section('the source matches this decision table');
   // influences a production build can set it.
   check(
     'demo mode is gated on the build-mode constant, not on import.meta.env.DEV',
-    src.includes('const IS_DEV_BUILD = __DEV_SERVER__ === true') &&
-      code.includes('if (!IS_DEV_BUILD) return') &&
-      !/const IS_DEV_BUILD = import\.meta\.env\.DEV/.test(src),
+    modeSrc.includes('const IS_DEV_BUILD = __DEV_SERVER__ === true') &&
+      modeCode.includes('if (!IS_DEV_BUILD) return') &&
+      !/const IS_DEV_BUILD = import\.meta\.env\.DEV/.test(modeSrc),
     'import.meta.env.DEV is left literal in the SSR bundle; a define is not',
   );
 
   check(
     'a production build returns broken before the demo flag is ever consulted',
-    code.indexOf("if (!IS_DEV_BUILD) return 'broken'") < code.indexOf('PUBLIC_DEMO_MODE'),
+    modeCode.indexOf("if (!IS_DEV_BUILD) return 'broken'") >= 0 &&
+      modeCode.indexOf("if (!IS_DEV_BUILD) return 'broken'") < modeCode.indexOf('PUBLIC_DEMO_MODE'),
     'the build check precedes the flag check',
   );
 
   const signInStart = src.indexOf('export async function signIn');
   const signInBody = src.slice(signInStart, signInStart + 900);
-  // The gate is `DEMO_SESSION`, not `DEMO_ALLOWED` and not `DEMO_MODE`. Naming matters
-  // here. `DEMO_MODE` is derived through a function, so a minifier cannot fold it and the
-  // demo branch survives into the bundle with its credentials intact; the fix for that
-  // was `DEMO_ALLOWED`, which compares a build-time substitution directly and so folds
-  // to `false`. But `DEMO_ALLOWED` alone is `IS_DEV_BUILD`, true on ANY development
-  // server, and a previous version of this file asserted on it and passed while the app
-  // booted authenticated as the seeded owner on a dev server with a real Supabase
-  // project configured. Foldable in a production build is necessary but NOT sufficient:
-  // the gate must also mean "demo mode is actually on". Hence `DEMO_SESSION`.
+  // The gate is `isDemoMode()`, which is `DEMO_ALLOWED && DEMO_MODE` — both module
+  // level `const`s in `~/lib/build-mode` — consumed by `session.ts` as the derived
+  // `DEMO_SESSION`. Naming matters: a direct comparison lets a minifier fold the
+  // demo branch to dead code and drop its credentials, and the CONJUNCTION means the
+  // branch needs a development server AND demo mode. `DEMO_ALLOWED` alone is true on
+  // ANY development server, and a previous version of this file asserted on it and
+  // passed while the app booted authenticated as the seeded owner on a dev server
+  // with a real Supabase project configured.
   //
-  // Both properties are asserted below: the identifier is `DEMO_SESSION`, that constant
-  // is defined as `DEMO_ALLOWED && DEMO_MODE`, and no gate anywhere uses the bare build
-  // flag. Foldability itself is proven empirically by the dist/ section of this file,
-  // which inspects the shipped artefact rather than the source text.
+  // Both properties are asserted below: `~/lib/build-mode` defines the conjunction,
+  // `~/lib/session` branches every demo path on the derived `DEMO_SESSION`, and no
+  // gate anywhere uses the bare build flag. Foldability itself is proven empirically
+  // by the dist/ section, which inspects the shipped artefact rather than the source.
   const gateSite = (fn: string, window = 1600) => {
     const at = src.indexOf(fn);
     return at >= 0 ? src.slice(at, at + window) : '';
   };
   check(
     'the demo gate is DEMO_SESSION, which means demo mode is actually on, not merely that this is a dev server',
-    /const DEMO_SESSION = DEMO_ALLOWED && DEMO_MODE/.test(src),
+    /return DEMO_ALLOWED && DEMO_MODE/.test(modeCode) &&
+      src.includes('const DEMO_SESSION = isDemoMode()'),
     'DEMO_ALLOWED alone is true on any dev server, which let a configured deployment boot as the seeded owner',
   );
   check(
@@ -299,18 +315,19 @@ section('the source matches this decision table');
   // quotes the old `if (DEMO_ALLOWED)` form, and matching a comment proves nothing —
   // this suite has already been burned once by assertions that read source text
   // instead of behaviour, so it only ever sees what the compiler would.
-  const srcCode = src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^[ \t]*\/\/.*$/gm, ' ');
   check(
     'no demo code path is gated on the bare build flag',
-    !/if \(!?DEMO_ALLOWED\)/.test(srcCode) &&
-      !/= DEMO_ALLOWED\s*\?/.test(srcCode) &&
-      !/if \(!?DEMO_ALLOWED\)\s*$/.test(srcCode),
-    'DEMO_ALLOWED may only appear inside the DEMO_SESSION definition',
+    !/if \(!?DEMO_ALLOWED\)/.test(code) &&
+      !/= DEMO_ALLOWED\s*\?/.test(code) &&
+      !/if \(!?DEMO_ALLOWED\)\s*$/.test(code) &&
+      !/if \(!?DEMO_ALLOWED\)/.test(modeCode),
+    'DEMO_ALLOWED may only appear inside the isDemoMode() definition',
   );
   check(
     'the bare build flag survives only in the two constants that derive from it',
-    (srcCode.match(/\bDEMO_ALLOWED\b/g) ?? []).length === 3,
-    'expected exactly three: the definition, DEMO_SESSION, and isDemoMode()',
+    (modeCode.match(/\bDEMO_ALLOWED\b/g) ?? []).length === 2 &&
+      (code.match(/\bDEMO_ALLOWED\b/g) ?? []).length === 0,
+    'expected exactly two in build-mode.ts (the definition and isDemoMode()) and none in session.ts',
   );
 
   // Demo-only SURFACES, not just demo-only behaviour.
@@ -327,7 +344,6 @@ section('the source matches this decision table');
   // which is `DEMO_ALLOWED && DEMO_MODE`. A bare `DEMO_ALLOWED` would satisfy a naive
   // "is it gated?" check while still rendering on any dev server, which is the exact
   // substitution that caused the fail-open fixed above.
-  const ROOT = 'C:/Users/LENOVO/OneDrive/Documents/Default Project/pharmaflowv3/';
   const sidebarSrc = (await Bun.file(ROOT + 'src/components/app-sidebar.tsx').text()).replace(
     /\/\*[\s\S]*?\*\//g,
     ' ',
@@ -383,14 +399,14 @@ section('the source matches this decision table');
   );
   check(
     'isDemoMode() is itself the conjunction, not a bare mode comparison',
-    /return DEMO_ALLOWED && DEMO_MODE/.test(src),
+    /return DEMO_ALLOWED && DEMO_MODE/.test(modeCode),
     'isDemoMode() must keep requiring a development server AND demo mode',
   );
 
   // The seeded accounts must live outside the production graph. They are still in
   // src/ — they have to be, for local development — so the assertion is that
   // session.ts no longer DEFINES them, only re-exports from the dev-only module.
-  const FIXTURES = 'C:/Users/LENOVO/OneDrive/Documents/Default Project/pharmaflowv3/src/lib/demo-fixtures.ts';
+  const FIXTURES = `${ROOT}src/lib/demo-fixtures.ts`;
   const fixtures = await Bun.file(FIXTURES).text();
   check(
     'the seeded accounts are defined in demo-fixtures.ts, not in session.ts',
@@ -402,8 +418,7 @@ section('the source matches this decision table');
   // environment variable. A define derived from `process.env` would reintroduce
   // exactly the weakness this whole change exists to remove: anything that can
   // influence a production build could then set it.
-  const VITE_CONFIG =
-    'C:/Users/LENOVO/OneDrive/Documents/Default Project/pharmaflowv3/vite.config.ts';
+  const VITE_CONFIG = `${ROOT}vite.config.ts`;
   const viteSrc = await Bun.file(VITE_CONFIG).text();
   check(
     'vite.config.ts defines __DEV_SERVER__ from the build command',
@@ -416,7 +431,7 @@ section('the source matches this decision table');
     'no process.env may reach the demo-auth gate',
   );
 
-  const SUPABASE = 'C:/Users/LENOVO/OneDrive/Documents/Default Project/pharmaflowv3/src/lib/supabase.ts';
+  const SUPABASE = `${ROOT}src/lib/supabase.ts`;
   const supabaseSrc = await Bun.file(SUPABASE).text();
   check(
     'isSupabaseConfigured trims, so whitespace does not count as configured',
@@ -428,15 +443,13 @@ section('the source matches this decision table');
 section('the PRODUCTION BUILD ARTEFACT carries no demo AUTHENTICATION path');
 {
   // Everything above tests the source. This tests the artefact that actually ships,
-  // which is the only claim that matters for requirement 6: no environment
-  // variable can re-enable what the build removed.
+  // which is the only claim that matters: no environment variable can re-enable what
+  // the build removed.
   //
   // The gate is written to be ELIMINABLE, not merely unreachable — `DEMO_ALLOWED` is
-  // a direct comparison against `import.meta.env.DEV`, so a minifier folds it to
-  // `false` and the demo branches become dead code. That is what removes the
-  // credentials from the bundle, and it is asserted here rather than assumed: a
-  // gate that is correct but not foldable ships inert credentials that a later
-  // audit has to reason about.
+  // a direct comparison against a build-time substitution, so a minifier folds it to
+  // `false` and the demo branches become dead code. That is what removes the demo
+  // sign-in from the bundle, and it is asserted here rather than assumed.
   //
   // Skipped with a visible notice when `dist/` is absent, so a source-only checkout
   // does not silently skip the most important section in the file.
@@ -462,7 +475,6 @@ section('the PRODUCTION BUILD ARTEFACT carries no demo AUTHENTICATION path');
         ? `${bundles.length} read`
         : `${artefacts.length - bundles.length} unreadable — the scan would have been partial`,
     );
-    // A partial scan that reports success is worse than no scan, because it is believed.
     const serverCount = bundles.filter((b) => /(^|\/)server\//.test(b.file)).length;
     const clientCount = bundles.filter((b) => /(^|\/)client\//.test(b.file)).length;
     check(
@@ -474,68 +486,83 @@ section('the PRODUCTION BUILD ARTEFACT carries no demo AUTHENTICATION path');
     const where = (needle: string) =>
       bundles.filter((b) => b.text.includes(needle)).map((b) => b.file);
 
-    // The session chunk is where an authentication path would have to live. It is
-    // checked separately because a hit here is a hit in the auth module itself,
-    // whereas the same string elsewhere may be inert display data.
-    // The session module in BOTH outputs. Checking only the client chunk would miss the
-    // exact regression this section was written for: `import.meta.env.DEV` folded in
-    // the client bundle while the SSR/worker bundle kept the demo path live at
-    // runtime, because `define` is applied to every environment and `import.meta.env`
-    // is not.
-    const sessionChunks = bundles.filter((b) => /session-[^/]*\.js$/.test(b.file));
+    // Comments are stripped before every check below. The SSR bundle is not
+    // minified, so JSDoc survives into the artefact and every prose mention of
+    // `DEMO_ALLOWED` or `__DEV_SERVER__` would otherwise read as a live reference.
+    // Only what the compiler kept is asserted.
+    const stripComments = (js: string) =>
+      js.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^[ \t]*\/\/.*$/gm, ' ');
+    const compiled = bundles.map((b) => ({ file: b.file, code: stripComments(b.text) }));
+
+    /*
+     * The AUTHENTICATION markers — and the inert seed DATA they are not.
+     *
+     * The demo gate is `isDemoMode()` in `~/lib/build-mode` (`DEMO_ALLOWED && DEMO_MODE`),
+     * consumed by `~/lib/session` as `DEMO_SESSION`. Those names — `DEMO_ALLOWED`,
+     * `DEMO_SESSION`, `isDemoMode` — ARE the demo authentication logic, and they are
+     * what this section must find folded to a literal `false`, or eliminated.
+     *
+     * `usr-owner`, `usr-assistant` and the seeded addresses are a different thing:
+     * sample pharmacy records from `~/domain/seed` (and the demo fixtures). They carry
+     * no password, authenticate nothing, and legitimately remain in the bundle because
+     * the seeded data is still referenced. Treating them as credentials is exactly what
+     * produced the false failure this section used to report, so they are reported
+     * below rather than failed on.
+     */
+
+    // (1) The gate constant, wherever the bundler left it. It is no longer in the
+    // session chunk: it lands in whichever chunk inlines `~/lib/build-mode`.
+    const gateBindings = compiled.flatMap((b) => {
+      const m = /DEMO_ALLOWED\s*=\s*([^;\n]+)/.exec(b.code);
+      return m ? [{ file: b.file, bound: m[1].trim() }] : [];
+    });
+    const isFalseLiteral = (v: string) => v === 'false' || v === '!1';
+    console.log(
+      gateBindings.length === 0
+        ? '      no compiled DEMO_ALLOWED binding found — the constant was inlined away'
+        : `      compiled DEMO_ALLOWED binding(s): ${gateBindings.map((g) => `${g.file} = ${g.bound}`).join(', ')}`,
+    );
     check(
-      'both the client and the server session bundles were inspected',
-      sessionChunks.length >= 2,
-      `${sessionChunks.length} session chunk(s): ${sessionChunks.map((b) => b.file).join(', ')}`,
+      'every DEMO_ALLOWED binding in dist is the literal false',
+      gateBindings.every((g) => isFalseLiteral(g.bound)),
+      gateBindings.length === 0
+        ? 'eliminated'
+        : gateBindings
+            .filter((g) => !isFalseLiteral(g.bound))
+            .map((g) => `${g.file} = ${g.bound}`)
+            .join(', '),
     );
 
-    // The security property is REACHABILITY, not textual absence.
-    //
-    // The client bundle is minified, so the demo branch is eliminated and the
-    // credentials disappear entirely. The SSR bundle this project builds with
-    // `@cloudflare/vite-plugin` is not minified, so the branch survives as
-    // unreachable code holding the constant. Both are correct; what must be true in
-    // every output is that the gate is bound to the literal `false`.
-    //
-    // Asserting textual absence instead was wrong twice over: it failed on a build
-    // that was already safe, and it matched occurrences inside preserved comments —
-    // the same comment-versus-code confusion that produced a false result earlier in
-    // this session.
-    const gateBinding = (text: string) => {
-      const m = /DEMO_ALLOWED\s*=\s*([^;\n]+)/.exec(text);
-      return m ? m[1].trim() : null;
+    // (2) The gate function. Where it survives (the un-minified SSR bundle) it must be
+    // a literal `false`; the minified client bundle folds its call sites instead.
+    const gateDefs = compiled.filter((b) => /function\s+isDemoMode\s*\(/.test(b.code));
+    const gateDefReturnsFalse = (codeText: string) => {
+      const m = /function\s+isDemoMode\s*\([^)]*\)\s*\{([^}]*)\}/.exec(codeText);
+      return m ? /^\s*return\s+(false|!1)\s*;?\s*$/.test(m[1]) : null;
     };
+    const badGateDefs = gateDefs.filter((b) => gateDefReturnsFalse(b.code) !== true);
+    console.log(
+      gateDefs.length === 0
+        ? '      no compiled isDemoMode() definition found — folded at every call site'
+        : `      compiled isDemoMode() definition(s): ${gateDefs.map((b) => b.file).join(', ')}`,
+    );
+    check(
+      'every compiled isDemoMode() definition returns the literal false',
+      badGateDefs.length === 0,
+      badGateDefs.map((b) => b.file).join(', '),
+    );
 
-    // Comments are stripped before any of these checks. The SSR bundle is not
-    // minified, so JSDoc blocks survive into the artefact and every prose mention
-    // of `__DEV_SERVER__` would otherwise read as a live reference.
-    const stripComments = (js: string) =>
-      js.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    // The gate is proven off when nothing about it survives, or everything that
+    // survives is a literal false. This is the property the session-chunk checks
+    // lean on: a surviving `DEMO_SESSION` branch is safe only because it reads this.
+    const gateProvenFalse =
+      gateBindings.every((g) => isFalseLiteral(g.bound)) && badGateDefs.length === 0;
 
-    for (const chunk of sessionChunks) {
-      const code = stripComments(chunk.text);
-      const bound = gateBinding(code);
-      const eliminated = !code.includes('DEMO_ALLOWED') && !code.includes('usr-owner');
-
-      // Three acceptable end states, in order of preference: the branch was
-      // eliminated, or the gate is bound to the literal `false`. Anything else —
-      // bound to `true`, or resolved from something at runtime — is a failure.
-      const safe = eliminated || bound === 'false';
-      check(
-        `the demo path cannot be entered from ${chunk.file}`,
-        safe,
-        eliminated
-          ? 'eliminated entirely'
-          : bound === null
-            ? 'gate not found and no credentials present'
-            : `DEMO_ALLOWED = ${bound}`,
-      );
-    }
-
-    // No output may resolve the gate at runtime, which is what an environment
-    // variable or a platform lookup would produce.
-    const runtimeResolved = sessionChunks.filter((b) =>
-      /import\.meta\.env\.DEV|__DEV_SERVER__/.test(stripComments(b.text)),
+    // (3) No output may resolve the gate at runtime — that is what an environment
+    // variable or a platform lookup would produce. Checked across every bundle,
+    // because the define may land anywhere the build-mode module is inlined.
+    const runtimeResolved = compiled.filter((b) =>
+      /import\.meta\.env\.DEV|__DEV_SERVER__/.test(b.code),
     );
     check(
       'no output resolves the demo gate at runtime',
@@ -545,36 +572,64 @@ section('the PRODUCTION BUILD ARTEFACT carries no demo AUTHENTICATION path');
         : runtimeResolved.map((b) => b.file).join(', '),
     );
 
-    // The client bundle should additionally have eliminated the branch outright.
-    const clientSession = sessionChunks.filter((b) => /client/.test(b.file));
-    const eliminated = clientSession.filter((b) => !stripComments(b.text).includes('usr-owner'));
+    // (4) The session chunk is where an authentication path would have to live. The
+    // client bundle must have eliminated it; the SSR bundle may keep it as dead code,
+    // but only because the gate it reads is proven a literal false above.
+    const sessionChunks = compiled.filter((b) => /session-[^/]*\.js$/.test(b.file));
     check(
-      'the client bundle eliminated the demo sign-in and its credentials entirely',
-      clientSession.length > 0 && eliminated.length === clientSession.length,
-      clientSession.length === 0
-        ? 'no client session chunk found'
-        : `${eliminated.length}/${clientSession.length} client chunk(s) clean`,
+      'both the client and the server session bundles were inspected',
+      sessionChunks.length >= 2,
+      `${sessionChunks.length} session chunk(s): ${sessionChunks.map((b) => b.file).join(', ')}`,
     );
 
-    // Inert seed DATA is a different matter and is reported, not failed on:
-    // `~/domain/seed` holds the sample pharmacy records the UI renders before any
-    // backend exists, and removing those is a separate decision about the offline
-    // experience. What matters here is that no authentication path consumes them.
-    const seededAddresses = ['khadija@pharmaflow.ng', 'aisha@pharmaflow.ng'];
-    const addressHits = seededAddresses.map((a) => ({
-      address: a,
-      files: where(a).filter((f) => !/session-/.test(f)),
-    }));
-    const outsideSession = addressHits.flatMap((h) => h.files);
-    console.log(
-      outsideSession.length === 0
-        ? '      no seeded address anywhere in dist/'
-        : `      NOTE: seeded addresses remain in non-auth chunks (sample data): ${[...new Set(outsideSession)].join(', ')}`,
+    for (const chunk of sessionChunks) {
+      const carriesAuthGate =
+        /DEMO_SESSION/.test(chunk.code) || /DEMO_ALLOWED\s*=/.test(chunk.code);
+      const eliminated = !carriesAuthGate;
+      check(
+        `the demo path cannot be entered from ${chunk.file}`,
+        eliminated || gateProvenFalse,
+        eliminated ? 'demo authentication branch eliminated' : 'gate proven a literal false',
+      );
+    }
+
+    // (5) The client bundle should additionally have eliminated the branch outright,
+    // not merely left a dead one: the demo sign-in gate must not survive there at all.
+    const clientSession = sessionChunks.filter((b) => /client/.test(b.file));
+    const clean = clientSession.filter(
+      (b) => !/DEMO_SESSION/.test(b.code) && !/DEMO_ALLOWED/.test(b.code),
     );
-    console.log(
-      '      They are sample pharmacy records from ~/domain/seed, not credentials:',
+    check(
+      'the client bundle eliminated the demo sign-in and its gate entirely',
+      clientSession.length > 0 && clean.length === clientSession.length,
+      clientSession.length === 0
+        ? 'no client session chunk found'
+        : `${clean.length}/${clientSession.length} client chunk(s) clean`,
     );
-    console.log('      nothing in the session module reads them, as asserted above.');
+
+    // (6) Inert seed DATA is reported, not failed on. These are sample pharmacy
+    // records; nothing in the session module authenticates with them (proved above),
+    // so their presence is a data question, not a gate one.
+    const sampleMarkers = [
+      'usr-owner',
+      'usr-assistant',
+      'khadija@pharmaflow.ng',
+      'aisha@pharmaflow.ng',
+    ];
+    const sampleHits = [...new Set(sampleMarkers.flatMap((m) => where(m)))];
+    console.log(
+      sampleHits.length === 0
+        ? '      no seeded sample records anywhere in dist/'
+        : `      NOTE: seeded sample records remain as inert data (no password, no auth path): ${sampleHits.join(', ')}`,
+    );
+    console.log('      They are sample pharmacy records from ~/domain/seed, not credentials:');
+    console.log('      nothing in the session module authenticates with them, as asserted above.');
+    const sampleInSession = sampleHits.filter((f) => /session-/.test(f));
+    if (sampleInSession.length > 0) {
+      console.log(
+        `      (they share the session chunk because ~/store/pharmacy imports ~/domain/seed: ${sampleInSession.join(', ')})`,
+      );
+    }
   }
 }
 

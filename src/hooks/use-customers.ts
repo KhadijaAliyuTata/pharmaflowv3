@@ -54,15 +54,17 @@ export function useCustomers(): CustomersState {
   // Only consulted in demo mode. In live mode this selector is never read, so a
   // stale local list cannot reach the screen.
   const localCustomers = usePharmacy((state) => state.customers);
-  const { status, currentBranchId, error: branchError } = useActiveBranch();
+  const { status, currentBranchId, error: branchError, source: branchSource } = useActiveBranch();
 
   const [remote, setRemote] = useState<{ branchId: string; customers: Customer[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   // Guards against a slow response for a branch the user has since left
-  // overwriting the list for the branch they are actually on.
-  const inFlight = useRef<string | null>(null);
+  // overwriting the list for the branch they are actually on. A sequence number
+  // also lets a newer retry supersede an older in-flight read instead of being
+  // suppressed by a permanently stuck "in flight" sentinel.
+  const requestSeq = useRef(0);
   // Bumped by `refresh()`. In the effect's dependencies so a re-read actually
   // happens, rather than the hook returning the copy it already has.
   const [reloadToken, setReloadToken] = useState(0);
@@ -76,17 +78,15 @@ export function useCustomers(): CustomersState {
     if (!useRemote || !currentBranchId) return;
 
     const branch = currentBranchId;
-    if (inFlight.current === branch) return;
-    inFlight.current = branch;
-
+    const seq = ++requestSeq.current;
     let cancelled = false;
     setLoading(true);
+    setError(null);
 
     void (async () => {
       const result = await listCustomers();
 
-      if (cancelled) return;
-      inFlight.current = null;
+      if (cancelled || seq !== requestSeq.current) return;
 
       if (!result.ok) {
         // Development detail to the console; a plain sentence to the pharmacist,
@@ -106,7 +106,7 @@ export function useCustomers(): CustomersState {
     return () => {
       cancelled = true;
     };
-  }, [useRemote, currentBranchId, reloadToken]);
+  }, [useRemote, currentBranchId, reloadToken, branchSource]);
 
   return useMemo(() => {
     // ---- demo / no backend. The seeded list is the data here. ----------------
@@ -139,6 +139,20 @@ export function useCustomers(): CustomersState {
       return {
         customers: remote.customers,
         loading,
+        error,
+        source: 'supabase' as const,
+        branchId: currentBranchId,
+        refresh,
+      };
+    }
+
+    // A failed read is a settled state, not an endless loading state. Returning
+    // `loading: true` here made storage/network failures indistinguishable from
+    // "still trying" and hid the error from every caller.
+    if (error) {
+      return {
+        customers: [],
+        loading: false,
         error,
         source: 'supabase' as const,
         branchId: currentBranchId,

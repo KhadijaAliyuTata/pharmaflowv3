@@ -230,7 +230,19 @@ export interface StockReceipt {
 
 /* -------------------------------------------------------------------- sales */
 
-export type PaymentMethod = 'cash' | 'transfer' | 'pos_card' | 'wallet';
+export type PaymentMethod = 'cash' | 'transfer' | 'pos_card' | 'wallet' | 'split';
+
+/**
+ * One row of a sale's payment history — a part of a split payment recorded at
+ * checkout, or a repayment recorded later. `recordedBy`/`recordedAt` are set
+ * only on repayments: the money collected at the till is the sale itself.
+ */
+export interface SalePayment {
+  method: PaymentMethod;
+  amount: number;
+  recordedBy?: string;
+  recordedAt?: string;
+}
 /** How the sale settled. `credit` means nothing was collected in full. */
 export type SaleStatus = 'paid' | 'part_paid' | 'credit' | 'refunded' | 'voided';
 
@@ -246,6 +258,8 @@ export interface CartLine {
 }
 
 export interface SaleItem extends CartLine {
+  /** Database line id. Present on mapped live sales; absent on demo seeds. */
+  id?: string;
   medicineName: string;
   genericName: string;
   /**
@@ -254,6 +268,67 @@ export interface SaleItem extends CartLine {
    */
   costPerBaseUnitSnapshot?: number;
   batchId?: string;
+}
+
+/* ------------------------------------------------------------------ returns */
+
+export type SaleReturnStatus = 'pending_review' | 'completed' | 'rejected';
+
+export type SaleReturnReason =
+  | 'wrong_medicine'
+  | 'damaged'
+  | 'customer_changed_mind'
+  | 'expired'
+  | 'recalled'
+  | 'other';
+
+export type SaleReturnMethod =
+  | 'cash'
+  | 'transfer'
+  | 'pos_card'
+  | 'wallet'
+  | 'store_credit'
+  | 'not_refunded';
+
+export interface SaleReturnItem {
+  saleItemId: string;
+  medicineId: MedicineId;
+  medicineName: string;
+  /** Whole units of the packaging the customer returned. */
+  quantity: number;
+  /** Base units, so quarantine/restock can be summed across packaging. */
+  baseUnitsTotal: number;
+  /** Value of this line at the original sale's proportional price. */
+  returnValue: number;
+  /** Units put back on the original lot. */
+  restockedUnits: number;
+  /** Units held out of sellable stock. */
+  quarantinedUnits: number;
+}
+
+/**
+ * A customer return, linked to the completed sale it reverses in part or whole.
+ *
+ * This is deliberately not a `Sale` with a different status. The original sale,
+ * its lines, receipt and payments are immutable; the return is its own
+ * transaction with its own number and review trail. `Sale.outstandingBalance`
+ * is already net of `creditApplied`; `Sale.total` remains the historical sale.
+ */
+export interface SaleReturn {
+  id: string;
+  returnNumber: string;
+  status: SaleReturnStatus;
+  reason: SaleReturnReason;
+  note: string;
+  createdAt: string;
+  reviewedAt?: string;
+  completedAt?: string;
+  reviewNote?: string;
+  refundValue: number;
+  creditApplied: number;
+  refundAmount: number;
+  refundMethod?: SaleReturnMethod;
+  items: SaleReturnItem[];
 }
 
 export interface Sale {
@@ -272,10 +347,23 @@ export interface Sale {
   /** Collected at the counter. Less than `total` for part_paid and credit. */
   amountPaid: number;
   outstandingBalance: number;
+  /**
+   * The split-method parts of the collected money, plus (later) each repayment.
+   * Supporting detail for reporting and reconciliation: `amountPaid` remains
+   * the money of record.
+   */
+  paymentBreakdown?: SalePayment[];
   customerId?: string;
   customerName?: string;
   customerPhone?: string;
   creditAccountId?: string;
+  /**
+   * The portion of accepted returns applied against this sale's outstanding
+   * balance. Historic sale totals and `amountPaid` are not rewritten.
+   */
+  returnedCredit?: number;
+  /** Linked returns, newest first. Absent/empty means none recorded. */
+  returns?: SaleReturn[];
   /** True when an Rx was dispensed under prescription, not OTC. */
   dispensedAgainstPrescription?: boolean;
   statusReason?: string;
@@ -477,7 +565,12 @@ export interface SaleSummary {
   count: number;
   gross: number;
   discount: number;
+  /** Gross sale value, before accepted returns. */
   net: number;
+  /** Value of completed returns in the counted sales. */
+  returned: number;
+  /** `net - returned`, floored at zero. */
+  netAfterReturns: number;
   /**
    * Cost of goods, or null when any sale line lacks a cost snapshot.
    *

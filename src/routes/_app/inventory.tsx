@@ -81,6 +81,7 @@ import {
 } from '~/components/app/primitives';
 import { daysUntil, formatCount, formatDate, formatNaira } from '~/domain/money';
 import { formatStockQuantity } from '~/domain/units';
+import { validateSellingPrice } from '~/domain/pricing';
 import { marginPercent, searchMedicines, sellableQuantity, stockStatus } from '~/domain/selectors';
 import type { Medicine, MedicineBatch, StockStatus } from '~/domain/types';
 import { usePharmacy, usePharmacyActions } from '~/store/pharmacy';
@@ -90,6 +91,7 @@ import {
   CATALOGUE_WRITE_UNAVAILABLE,
   catalogueWritesAvailable,
 } from '~/lib/catalogue-writes';
+import { updateMedicinePrice } from '~/lib/supabase/catalog';
 import { useSeedQuery } from '~/lib/use-seed-query';
 
 export const Route = createFileRoute('/_app/inventory')({
@@ -145,7 +147,12 @@ function Inventory() {
   const { q } = Route.useSearch();
   // Catalogue comes from Supabase in live mode; see useMedicines for why it has no
   // localStorage fallback there.
-  const { medicines, loading: catalogueLoading, error: catalogueError } = useMedicines();
+  const {
+    medicines,
+    loading: catalogueLoading,
+    error: catalogueError,
+    refresh: refreshCatalogue,
+  } = useMedicines();
   const suppliers = usePharmacy((state) => state.suppliers);
   // Authoritative: `pf_is_owner()` resolves branch_memberships.role. Display
   // gating only — `profiles.role` is a cache and RLS is the boundary.
@@ -227,17 +234,25 @@ function Inventory() {
   /**
    * Every mutating catalogue action funnels through here.
    *
-   * In live mode the list on screen came from Supabase while these actions would
-   * rewrite `state.medicines` in localStorage — two different collections of rows.
-   * So the action is refused with a visible reason instead of appearing to succeed
-   * and then vanishing on the next render. Nothing is written in either case, and
-   * `setPending` is never reached, so no dialog can submit a local mutation.
+   * In live mode the list on screen came from Supabase while the general write
+   * actions would rewrite `state.medicines` in localStorage — two different
+   * collections of rows. Those actions are refused with a visible reason instead
+   * of appearing to succeed and then vanishing on the next render. The selling
+   * price is the exception: an owner may open it because it writes through the
+   * authoritative `pf_update_medicine_price` RPC with an expected-price guard.
+   * Stock, lock and recall still return before `setPending`, so no dialog can
+   * submit a local mutation. The price path is only usable once its migration is
+   * applied; a missing RPC is surfaced by the dialog rather than treated as success.
    *
    * Gating the single handler rather than each menu item covers the row menu and the
    * detail sheet together, and cannot be bypassed by a control added later.
    */
   function openAction(next: Pending) {
-    if (!writesAvailable) {
+    // Selling price has an authoritative live write path now; the other three
+    // catalogue mutations still write only to the demo store, so they remain
+    // refused in live mode rather than appearing to succeed.
+    const livePrice = next.kind === 'price' && isOwner && !writesAvailable;
+    if (!writesAvailable && !livePrice) {
       setActionNotice(CATALOGUE_WRITE_UNAVAILABLE);
       return;
     }
@@ -599,7 +614,9 @@ function Inventory() {
           key={actionKey(pending)}
           pending={pending}
           isOwner={isOwner}
+          live={!writesAvailable}
           onClose={() => setPending(null)}
+          onPriceChanged={refreshCatalogue}
           updatePrice={updatePrice}
           adjustStock={adjustStock}
           setSafetyLock={setSafetyLock}
@@ -1013,7 +1030,11 @@ interface ActionDialogProps {
    * their own `canApprovePricing` checks, and the database is the boundary.
    */
   isOwner: boolean;
+  /** True when the catalogue is read from Supabase and price uses the RPC. */
+  live: boolean;
   onClose: () => void;
+  /** Re-read the catalogue after a confirmed server price change. */
+  onPriceChanged: () => void;
   updatePrice: (medicineId: string, price: number) => OperationResult;
   adjustStock: (medicineId: string, quantity: number, reason: string) => OperationResult;
   setSafetyLock: (medicineId: string, locked: boolean, reason?: string) => OperationResult;
@@ -1030,23 +1051,93 @@ const OWNER_ONLY: Record<Pending['kind'], boolean> = {
 function ActionDialog({
   pending,
   isOwner,
+  live,
   onClose,
+  onPriceChanged,
   updatePrice,
   adjustStock,
   setSafetyLock,
   setBatchRecall,
 }: ActionDialogProps) {
   const [reason, setReason] = useState('');
-  const [price, setPrice] = useState(String(pending.medicine.pricePerBaseUnit));
+  const [unitKey, setUnitKey] = useState(
+    pending.medicine.units[0]?.key ?? 'base',
+  );
+  const [price, setPrice] = useState(
+    String(
+      pending.medicine.units.find((unit) => unit.key === unitKey)?.sellingPrice ??
+        pending.medicine.pricePerBaseUnit,
+    ),
+  );
   const [quantity, setQuantity] = useState(String(pending.medicine.totalQuantity));
   const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
-  function submit() {
+  const selectedUnit =
+    pending.medicine.units.find((unit) => unit.key === unitKey) ??
+    pending.medicine.units[0];
+  const expectedPrice = selectedUnit?.sellingPrice ?? pending.medicine.pricePerBaseUnit;
+  const livePrice = live && pending.kind === 'price';
+
+  async function submit() {
     setError(null);
 
     // Enforced against the authoritative role, not only by hiding the control.
     if (OWNER_ONLY[pending.kind] && !isOwner) {
       setError('Only an owner can change prices, locks or recalls');
+      return;
+    }
+
+    if (livePrice) {
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+        setError('Price changes need a connection to the pharmacy server. Nothing has been saved.');
+        return;
+      }
+      if (!selectedUnit) {
+        setError('Choose a unit to reprice.');
+        return;
+      }
+
+      const checked = validateSellingPrice({
+        price: Number(price),
+        unitMultiplier: selectedUnit.multiplier,
+        ...(pending.medicine.costPerBaseUnit === undefined
+          ? {}
+          : { costPerBaseUnit: pending.medicine.costPerBaseUnit }),
+        currentPrice: expectedPrice,
+        expectedPrice,
+      });
+      if (!checked.ok) {
+        setError(checked.error);
+        return;
+      }
+
+      setSubmitting(true);
+      const result = await updateMedicinePrice({
+        medicineId: pending.medicine.id,
+        unitKey: selectedUnit.key,
+        newPrice: checked.value,
+        expectedPrice,
+        reason,
+      });
+      setSubmitting(false);
+
+      if (!result.ok) {
+        setError(
+          result.error.includes('changed while')
+            ? `${result.error} Close and reopen the price editor to use the newer price.`
+            : result.error,
+        );
+        // A stale refusal means the list behind this dialog is out of date.
+        // Refresh it now, even though the owned form will still be refused
+        // until it is reopened with the new expected price.
+        if (result.error.includes('changed while')) onPriceChanged();
+        return;
+      }
+
+      // Only after the server confirms.
+      onPriceChanged();
+      onClose();
       return;
     }
 
@@ -1080,17 +1171,57 @@ function ActionDialog({
         </DialogHeader>
 
         {pending.kind === 'price' && (
-          <Field>
-            <FieldLabel htmlFor="action-price">Price per base unit</FieldLabel>
-            <Input
-              id="action-price"
-              type="number"
-              inputMode="decimal"
-              min={0}
-              value={price}
-              onChange={(event) => setPrice(event.target.value)}
-            />
-          </Field>
+          <div className="space-y-3">
+            {live && pending.medicine.units.length > 0 && (
+              <Field>
+                <FieldLabel htmlFor="action-unit">Unit to reprice</FieldLabel>
+                <Select
+                  value={unitKey}
+                  onValueChange={(value) => {
+                    const nextKey = value ?? unitKey;
+                    setUnitKey(nextKey);
+                    const nextUnit = pending.medicine.units.find(
+                      (unit) => unit.key === nextKey,
+                    );
+                    if (nextUnit) setPrice(String(nextUnit.sellingPrice));
+                  }}
+                >
+                  <SelectTrigger id="action-unit" aria-label="Unit to reprice">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {pending.medicine.units.map((unit) => (
+                      <SelectItem key={unit.key} value={unit.key}>
+                        {unit.name}
+                        {unit.multiplier === 1 ? ' (base)' : ` · ${unit.multiplier} base units`}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+            )}
+
+            <Field>
+              <FieldLabel htmlFor="action-price">
+                Price per {live ? (selectedUnit?.name ?? 'unit') : 'base unit'}
+              </FieldLabel>
+              <Input
+                id="action-price"
+                type="number"
+                inputMode="decimal"
+                min={0}
+                step="0.01"
+                value={price}
+                onChange={(event) => setPrice(event.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Current price: {formatNaira(expectedPrice)}
+                {live
+                  ? ' · a change made on another screen will be refused rather than overwritten.'
+                  : ''}
+              </p>
+            </Field>
+          </div>
         )}
 
         {pending.kind === 'stock' && (
@@ -1107,24 +1238,28 @@ function ActionDialog({
           </Field>
         )}
 
-        {pending.kind !== 'price' && (
-          <Field>
-            <FieldLabel htmlFor="action-reason">Reason</FieldLabel>
-            <Textarea
-              id="action-reason"
-              value={reason}
-              onChange={(event) => setReason(event.target.value)}
-              placeholder={REASON_PLACEHOLDER[pending.kind]}
-            />
-          </Field>
-        )}
+        <Field>
+          <FieldLabel htmlFor="action-reason">Reason</FieldLabel>
+          <Textarea
+            id="action-reason"
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+            placeholder={REASON_PLACEHOLDER[pending.kind]}
+          />
+        </Field>
 
         {error && <FieldError>{error}</FieldError>}
 
         <DialogFooter>
-          <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
-          <Button variant={pending.kind === 'price' ? 'default' : 'destructive'} onClick={submit}>
-            {pending.kind === 'stock' ? 'Save' : 'Confirm'}
+          <DialogClose render={<Button variant="outline" disabled={submitting} />}>
+            Cancel
+          </DialogClose>
+          <Button
+            variant={pending.kind === 'price' ? 'default' : 'destructive'}
+            onClick={() => void submit()}
+            disabled={submitting}
+          >
+            {submitting ? 'Saving…' : pending.kind === 'stock' ? 'Save' : 'Confirm'}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -1132,7 +1267,8 @@ function ActionDialog({
   );
 }
 
-const REASON_PLACEHOLDER: Record<Exclude<Pending['kind'], 'price'>, string> = {
+const REASON_PLACEHOLDER: Record<Pending['kind'], string> = {
+  price: 'Supplier price change, new margin, or correction',
   stock: 'Stock count correction',
   lock: 'NAFDAC alert, pending re-verification',
   recall: 'Manufacturer recall, wrong marking',
@@ -1154,7 +1290,7 @@ function actionTitle(pending: Pending): string {
 function actionDescription(pending: Pending): string {
   switch (pending.kind) {
     case 'price':
-      return `${pending.medicine.name} · per base unit`;
+      return `${pending.medicine.name} · selling price`;
     case 'stock':
       return `${pending.medicine.name} · ${formatCount(pending.medicine.totalQuantity)} on hand`;
     case 'lock':

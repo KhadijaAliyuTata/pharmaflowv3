@@ -74,7 +74,9 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       {
         label: 'Dashboard',
-        to: '/',
+        // The app dashboard moved off `/` when the public landing page took
+        // that URL. Every other reference to the old path follows this one.
+        to: '/dashboard',
         icon: LayoutDashboard,
         keywords: ['home', 'overview', 'summary'],
       },

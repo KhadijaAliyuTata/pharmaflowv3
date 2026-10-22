@@ -80,7 +80,7 @@ function Join() {
    * correct.
    */
   if (status === 'authenticated' || signedInWithCode) {
-    if (!token.trim()) return <Navigate to="/" />;
+    if (!token.trim()) return <Navigate to="/dashboard" />;
     return <RedeemScreen token={token.trim()} />;
   }
 
@@ -288,7 +288,7 @@ function RedeemScreen({ token }: { token: string }) {
               Your invitation has been accepted and you have access to this pharmacy.
             </p>
           </div>
-          <Button type="button" className="w-full" onClick={() => void navigate({ to: '/' })}>
+          <Button type="button" className="w-full" onClick={() => void navigate({ to: '/dashboard' })}>
             Go to the dashboard
           </Button>
         </div>

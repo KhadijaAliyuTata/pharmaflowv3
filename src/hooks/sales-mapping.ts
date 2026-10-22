@@ -1,7 +1,7 @@
 import type { SaleItemRow } from '~/lib/db.types';
 import type { Sale } from '~/domain/types';
-import type { SaleItem } from '~/domain/types';
-import type { SaleWithItems } from '~/lib/supabase/sales';
+import type { SaleItem, SaleReturn } from '~/domain/types';
+import type { SaleReturnWithItems, SaleWithItems } from '~/lib/supabase/sales';
 
 /**
  * `sales` + `sale_items` rows -> the domain `Sale` the screens already render.
@@ -31,6 +31,7 @@ import type { SaleWithItems } from '~/lib/supabase/sales';
 
 function toSaleItem(row: SaleItemRow): SaleItem {
   return {
+    id: row.id,
     medicineId: row.medicine_id,
     unitKey: row.unit_key,
     unitName: row.unit_name,
@@ -46,14 +47,52 @@ function toSaleItem(row: SaleItemRow): SaleItem {
   };
 }
 
+function toSaleReturn(
+  row: SaleReturnWithItems,
+  saleItems: Map<string, SaleItemRow>,
+): SaleReturn {
+  return {
+    id: row.id,
+    returnNumber: row.return_number,
+    status: row.status,
+    reason: row.reason,
+    note: row.note,
+    createdAt: row.created_at,
+    ...(row.reviewed_at ? { reviewedAt: row.reviewed_at } : {}),
+    ...(row.completed_at ? { completedAt: row.completed_at } : {}),
+    ...(row.review_note ? { reviewNote: row.review_note } : {}),
+    refundValue: Number(row.refund_value),
+    creditApplied: Number(row.credit_applied),
+    refundAmount: Number(row.refund_amount),
+    ...(row.refund_method ? { refundMethod: row.refund_method } : {}),
+    items: (row.medicine_return_items ?? []).map((item) => {
+      const line = saleItems.get(item.sale_item_id);
+      return {
+        saleItemId: item.sale_item_id,
+        medicineId: item.medicine_id,
+        medicineName: line?.medicine_name ?? 'Product',
+        quantity: item.quantity,
+        baseUnitsTotal: item.base_units_total,
+        returnValue: Number(item.return_value),
+        restockedUnits: item.restocked_units,
+        quarantinedUnits: item.quarantined_units,
+      };
+    }),
+  };
+}
+
 export function toSale(row: SaleWithItems, attendantName: string): Sale {
+  const saleItems = row.sale_items ?? [];
+  const linesById = new Map(saleItems.map((line) => [line.id, line]));
+  const returnedCredit = Number(row.returned_credit ?? 0);
+
   return {
     id: row.id,
     receiptNumber: row.receipt_number,
     date: row.sold_at,
     attendantId: row.attendant_id,
     attendantName,
-    items: (row.sale_items ?? []).map(toSaleItem),
+    items: saleItems.map(toSaleItem),
     subtotal: Number(row.subtotal),
     discount: Number(row.discount),
     ...(row.discount_reason ? { discountReason: row.discount_reason } : {}),
@@ -63,7 +102,13 @@ export function toSale(row: SaleWithItems, attendantName: string): Sale {
     // a null is read as the default the column documents, `paid`, not as unknown.
     status: row.state ?? 'paid',
     amountPaid: Number(row.amount_paid),
-    outstandingBalance: Number(row.outstanding),
+    // Accepted return credit is a separate, linked adjustment. The amount still
+    // owed is the original outstanding less that credit; it is never negative.
+    outstandingBalance: Math.max(Number(row.outstanding) - returnedCredit, 0),
+    ...(returnedCredit > 0 ? { returnedCredit } : {}),
+    returns: (row.medicine_returns ?? [])
+      .map((entry) => toSaleReturn(entry, linesById))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     ...(row.customer_id ? { customerId: row.customer_id } : {}),
     ...(row.credit_account_id ? { creditAccountId: row.credit_account_id } : {}),
     ...(row.dispensed_against_prescription ? { dispensedAgainstPrescription: true } : {}),

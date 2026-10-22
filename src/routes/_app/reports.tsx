@@ -241,17 +241,28 @@ function ReportsScreen() {
           <>
             <StatTile
               label="Net revenue"
-              value={<Money value={summary.net} compact />}
-              hint={`${formatPercent(percentOf(summary.discount, summary.gross))} of gross discounted off`}
+              value={<Money value={summary.netAfterReturns} compact />}
+              hint={
+                summary.returned > 0
+                  ? `${formatNaira(summary.returned)} returned · ${formatPercent(percentOf(summary.discount, summary.gross))} discounted off`
+                  : `${formatPercent(percentOf(summary.discount, summary.gross))} of gross discounted off`
+              }
               icon={<Banknote className="size-4" />}
             />
+            {summary.returned > 0 && (
+              <StatTile
+                label="Returns"
+                value={<Money value={summary.returned} compact />}
+                hint="Accepted customer returns"
+              />
+            )}
             <StatTile
               label="Gross margin"
               value={<MaybeMoney value={summary.margin} compact />}
               hint={
                 summary.marginPercent === null
                   ? 'Cost of goods not captured for some sales'
-                  : `${formatPercent(summary.marginPercent)} of net revenue`
+                  : `${formatPercent(summary.marginPercent)} of gross sales`
               }
             />
             <StatTile

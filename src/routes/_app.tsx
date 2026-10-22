@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Navigate, Outlet, createFileRoute, redirect, useNavigate } from '@tanstack/react-router';
+import { Navigate, Outlet, createFileRoute, redirect, useLocation, useNavigate } from '@tanstack/react-router';
 import { AppHeader } from '~/components/app-header';
 import { AppSidebar } from '~/components/app-sidebar';
 import { GlobalSearch } from '~/components/app/global-search';
@@ -9,10 +9,14 @@ import { Button } from '~/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '~/components/ui/card';
 import { SidebarInset, SidebarProvider } from '~/components/ui/sidebar';
 import { Toaster } from '~/components/ui/sonner';
+import { toast } from 'sonner';
 import { useHotkeys } from '~/lib/use-hotkeys';
-import { peekSession, signOut, useSession } from '~/lib/session';
+import { peekSession, useSession } from '~/lib/session';
+import { signOutSafely } from '~/lib/sign-out';
 import {
+  effectiveRole,
   resolveActiveBranch,
+  roleForBranch,
   useActiveBranch,
 } from '~/lib/supabase/branch-context';
 
@@ -51,6 +55,7 @@ function AppLayout() {
   const { user, status } = useSession();
   const branch = useActiveBranch();
   const navigate = useNavigate();
+  const location = useLocation();
   const [commandOpen, setCommandOpen] = useState(false);
   // Two independent dialogs. Search finds records; the palette jumps to screens.
   // Neither shares state with the other or with the theme toggle.
@@ -64,7 +69,17 @@ function AppLayout() {
   // `owner` — the same role the seeded store reports. Matching that on the
   // client's first render is what keeps hydration quiet; the real role lands in
   // the effect inside `useSession` and re-filters the nav.
-  const role = user?.role ?? 'owner';
+  //
+  // A cached branch is different: it is stale authorisation, so even if the
+  // profile cache is missing or unreadable the offline shell must never render
+  // owner-only navigation. The server still enforces RLS, but the UI must not
+  // invite an unverified session into owner screens.
+  const role = effectiveRole(
+    branch.source,
+    roleForBranch(branch.currentBranchId),
+    user?.role ?? null,
+    'owner',
+  );
 
   // ⌘K / Ctrl+K opens the screen palette; "/" opens record search. The hook skips
   // editable targets, so neither hijacks typing inside the POS cart or a form.
@@ -121,8 +136,10 @@ function AppLayout() {
                 size="sm"
                 variant="ghost"
                 onClick={() => {
-                  signOut();
-                  void navigate({ to: '/login' });
+                  void signOutSafely().then((result) => {
+                    if (result.warning) toast.warning(result.warning);
+                    void navigate({ to: '/login' });
+                  });
                 }}
               >
                 Sign out
@@ -145,7 +162,55 @@ function AppLayout() {
         />
         <main className="flex-1 p-4 md:p-6">
           <SuspendedBanner />
-          <Outlet />
+          {branch.source === 'cache' && (
+            <div
+              role="status"
+              className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950"
+            >
+              <span className="font-medium">Saved branch — server not reachable.</span>{' '}
+              The till can reopen offline from this device. Reconnect to verify that access and
+              prices are still current; when a saved catalogue is available, its stock is only a
+              cached estimate and is not reserved.
+            </div>
+          )}
+          {branch.source === 'server' && branch.snapshotError && (
+            <div
+              role="status"
+              className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950"
+            >
+              <span className="font-medium">Offline reload is not saved on this device.</span>{' '}
+              {branch.snapshotError} The online till still works; reconnect before reloading if the
+              connection drops.
+            </div>
+          )}
+          {branch.source === 'cache' && location.pathname !== '/pos' ? (
+            // Offline scope is deliberately narrow: the sale-intent safety net
+            // on POS is supported; inventory, reports, returns and pricing are
+            // not. Letting them render against a cached branch would show stale
+            // or empty data as if it were current.
+            <Card className="max-w-lg">
+              <CardHeader>
+                <CardTitle>Only the Point of Sale works offline</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <p className="text-sm text-muted-foreground">
+                  This device cannot reach the pharmacy server. Other screens need the server, so
+                  they are unavailable until the connection returns. The POS can still reopen from
+                  this device using its saved branch and queued sales.
+                </p>
+                <div className="flex items-center gap-2">
+                  <Button size="sm" onClick={() => void navigate({ to: '/pos' })}>
+                    Open Point of Sale
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => void resolveActiveBranch()}>
+                    Check connection
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ) : (
+            <Outlet />
+          )}
         </main>
       </SidebarInset>
 

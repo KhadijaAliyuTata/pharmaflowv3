@@ -11,6 +11,7 @@ import {
   CalendarClock,
   ChartLine,
   CheckCircle2,
+  ClipboardCheck,
   ClipboardX,
   Compass,
   EyeOff,
@@ -67,6 +68,13 @@ import { Button } from '~/components/ui/button';
  */
 
 const DEMO_URL = 'https://pharmaflow-demo.aliyutatak.workers.dev/demo';
+
+/**
+ * No Google Form responder URL is configured in this project. Keep this null
+ * rather than inventing a destination: the pilot section renders the secondary
+ * CTA disabled with a short explanation until the real URL is supplied.
+ */
+const WAITLIST_URL: string | null = null;
 
 const NAV_LINKS = [
   { href: '#problem', label: 'The problem' },
@@ -314,7 +322,10 @@ function LandingPage() {
         <SolutionSection />
         <HowItWorksSection />
         <EcosystemSection />
+        <ValidationSection />
         <RoadmapSection />
+        <PilotSection />
+        <FaqSection />
         <DemoSection />
       </main>
 
@@ -432,7 +443,7 @@ function Hero() {
 
           <h1
             id="hero-heading"
-            className="mt-5 text-4xl font-bold tracking-tight text-navy-900 sm:text-5xl lg:text-[3.35rem] lg:leading-[1.06]"
+            className="mt-5 text-3xl font-bold tracking-tight text-navy-900 sm:text-4xl lg:text-5xl lg:leading-[1.08]"
           >
             Your Pharmacy. Under Control. Wherever You Are.
           </h1>
@@ -440,12 +451,10 @@ function Hero() {
           <p className="mt-5 max-w-2xl text-base leading-relaxed text-grey-700 sm:text-lg">
             PharmaFlow is an integrated pharmacy management and online ordering platform designed
             to help community pharmacies manage sales, stock, purchasing, staff activity and
-            returns while connecting customers with pharmacies.
-          </p>
-          <p className="mt-3 max-w-2xl text-base leading-relaxed text-grey-700">
-            By bringing pharmacy operations and customer access together, PharmaFlow aims to
-            reduce the challenges of manual record-keeping, improve visibility into daily
-            activities, and help pharmacies serve their communities more efficiently.
+            returns while connecting customers with pharmacies. By bringing pharmacy operations and
+            customer access together, PharmaFlow aims to reduce the challenges of manual
+            record-keeping, improve visibility into daily activities, and help pharmacies serve
+            their communities more efficiently.
           </p>
 
           <ul className="mt-6 grid gap-2.5 sm:grid-cols-3">
@@ -568,10 +577,6 @@ function ProblemSection() {
           ))}
         </div>
 
-        <p className="mt-10 max-w-3xl text-sm leading-relaxed text-grey-700">
-          Not every pharmacy runs into all of these, and plenty are already well run. They are the
-          gaps PharmaFlow is designed to reduce — each with a corresponding capability below.
-        </p>
       </div>
     </section>
   );
@@ -608,13 +613,13 @@ const SOLUTIONS = [
     icon: PackageCheck,
     title: 'Returned-product recording',
     body: 'Customer returns are recorded with a reason, quantity and outcome. Items approved for resale are separated from those quarantined as damaged, expired or otherwise unsuitable — a returned medicine is never added back to saleable stock automatically. Pharmacy procedures and safety requirements still apply.',
-    badge: 'Supplier returns planned',
+    badge: null,
   },
   {
     icon: Radar,
     title: 'Demand Radar — Turn customer requests into stocking insights',
     body: "PharmaFlow's Demand Radar is designed to capture requests for medicines that are not currently in stock, helping pharmacies identify repeated customer needs and understand unmet demand. These insights can guide smarter purchasing and stocking decisions, helping pharmacies respond more effectively to what their customers are asking for. Request capture is in development; the demo shows the screen using seeded sample requests.",
-    badge: 'In development',
+    badge: null,
   },
 ] as const;
 
@@ -676,34 +681,9 @@ function SolutionSection() {
             ))}
           </div>
 
-          <StatusNote />
         </div>
       </section>
     </>
-  );
-}
-
-/**
- * The honesty boundary, stated once and in the open rather than buried in a
- * footnote. Everything above is a capability; this is what is actually
- * demonstrable today.
- */
-function StatusNote() {
-  return (
-    <div className="mt-8 rounded-2xl border border-border bg-white p-5">
-      <p className="flex items-center gap-2 text-sm font-semibold text-navy-900">
-        <ShieldCheck className="size-4 text-green-700" aria-hidden />
-        What is running today
-      </p>
-      <p className="mt-2 max-w-3xl text-sm leading-relaxed text-grey-700">
-        The owner and attendant experiences run on the PharmaFlow application with seeded sample
-        data — including sales, stock, batch and expiry records, staff roles and customer returns.
-        The supplier and customer experiences are labelled prototypes: they simulate quotation,
-        discovery and ordering flows and connect to nothing real. Supplier returns and online
-        ordering beyond the prototype are planned. There are no live supplier integrations,
-        payments, real-time stock guarantees or order fulfilment behind any of them.
-      </p>
-    </div>
   );
 }
 
@@ -764,29 +744,21 @@ const ROLES = [
     icon: Building2,
     title: 'Pharmacy Owner',
     body: 'Oversight and reports.',
-    status: 'Demo · runs on the app',
-    tone: 'live',
   },
   {
     icon: ScanBarcode,
     title: 'Pharmacy Attendant',
     body: 'Daily pharmacy operations.',
-    status: 'Demo · runs on the app',
-    tone: 'live',
   },
   {
     icon: Truck,
     title: 'Supplier',
     body: 'Supply information and quotations.',
-    status: 'Prototype · simulated',
-    tone: 'prototype',
   },
   {
     icon: ShoppingCart,
     title: 'Customer',
     body: 'Medicine discovery and orders.',
-    status: 'Prototype · simulated',
-    tone: 'prototype',
   },
 ] as const;
 
@@ -816,16 +788,6 @@ function EcosystemSection() {
                 </span>
                 <h3 className="mt-4 text-base font-semibold text-navy-900">{role.title}</h3>
                 <p className="mt-1 text-sm text-grey-700">{role.body}</p>
-                <span
-                  className={cn(
-                    'mt-4 inline-block rounded-full border px-2 py-0.5 text-[10px] font-bold tracking-wide uppercase',
-                    role.tone === 'live'
-                      ? 'border-green-600/30 bg-green-50 text-green-700'
-                      : 'border-amber-600/30 bg-amber-100 text-amber-600',
-                  )}
-                >
-                  {role.status}
-                </span>
               </div>
 
               {index < ROLES.length - 1 && (
@@ -838,11 +800,97 @@ function EcosystemSection() {
           ))}
         </ol>
 
-        <p className="mt-8 max-w-3xl text-sm leading-relaxed text-grey-700">
-          Only the owner and attendant experiences run on the application today. Supplier and
-          customer are prototypes, and the arrow shows how information is intended to move between
-          roles — not a live connection.
-        </p>
+      </div>
+    </section>
+  );
+}
+
+/* ------------------------------------------------------------ validation */
+
+const VALIDATION_CARDS = [
+  {
+    icon: Users,
+    label: 'Discovery',
+    title: 'Owner discovery conversations',
+    body: 'Direct conversations with community pharmacy owners about stock, sales, accountability and customer service.',
+  },
+  {
+    icon: ClipboardCheck,
+    label: 'Workflow',
+    title: 'Workflow research',
+    body: 'Reviewing how pharmacy teams record sales, receive stock, manage batches, handle returns and monitor expiry.',
+  },
+  {
+    icon: ChartLine,
+    label: 'Survey',
+    title: 'Survey-informed priorities',
+    body: 'Early survey input helps prioritise the operational gaps PharmaFlow should address first.',
+  },
+  {
+    icon: FlaskConical,
+    label: 'Pilot',
+    title: 'Pilot-fit design',
+    body: 'Pilot scope is shaped around the workflows pharmacies actually use, with fit and participation discussed individually.',
+  },
+] as const;
+
+function ValidationSection() {
+  return (
+    <section
+      id="validation"
+      aria-labelledby="validation-heading"
+      className="relative scroll-mt-24 overflow-hidden border-y border-border/60 bg-gradient-to-b from-white via-green-50/40 to-white"
+    >
+      <FloatingMarks variant="ecosystem" />
+
+      <div className="relative mx-auto max-w-6xl px-4 py-16 sm:px-6 lg:py-24">
+        <div className="grid gap-10 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:items-start lg:gap-12">
+          <div>
+            <SectionHeading
+              id="validation-heading"
+              eyebrow="Validation & credibility"
+              title="Built Around Real Pharmacy Challenges"
+              lede="PharmaFlow is being shaped by conversations with pharmacy owners and research into the everyday challenges of managing stock, recording sales, maintaining accountability, and serving customers."
+            />
+
+            <div className="mt-6 flex gap-3 rounded-2xl border border-green-600/20 bg-white/80 p-5 shadow-sm backdrop-blur">
+              <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-green-50 text-green-700">
+                <ShieldCheck className="size-5" aria-hidden />
+              </span>
+              <div>
+                <p className="text-sm font-semibold text-navy-900">Validation is ongoing</p>
+                <p className="mt-1 text-sm leading-relaxed text-grey-700">
+                  PharmaFlow continues to validate its workflows with pharmacies before wider
+                  rollout.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="pf-reveal grid gap-4 sm:grid-cols-2">
+            {VALIDATION_CARDS.map((card) => (
+              <article
+                key={card.title}
+                className="group relative flex h-full flex-col overflow-hidden rounded-2xl border border-border bg-white p-5 shadow-sm transition duration-300 ease-out hover:-translate-y-0.5 hover:border-green-600/40 hover:shadow-lg hover:shadow-navy-900/5 motion-reduce:transition-none motion-reduce:hover:translate-y-0"
+              >
+                <span
+                  aria-hidden
+                  className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-green-600/50 to-transparent"
+                />
+                <div className="flex items-start justify-between gap-3">
+                  <span className="flex size-10 items-center justify-center rounded-xl bg-green-50 text-green-700 transition-colors duration-300 group-hover:bg-green-100">
+                    <card.icon className="size-5" aria-hidden />
+                  </span>
+                  <span className="pt-1 text-[10px] font-bold tracking-[0.14em] text-grey-500 uppercase">
+                    {card.label}
+                  </span>
+                </div>
+                <h3 className="mt-4 text-base font-semibold text-navy-900">{card.title}</h3>
+                <p className="mt-2 text-sm leading-relaxed text-grey-700">{card.body}</p>
+              </article>
+            ))}
+          </div>
+        </div>
       </div>
     </section>
   );
@@ -856,6 +904,7 @@ interface RoadmapFeature {
   icon: LucideIcon;
   title: string;
   body: string;
+  note?: string;
 }
 
 interface RoadmapTab {
@@ -871,10 +920,10 @@ interface RoadmapTab {
 }
 
 /**
- * Category copy reflects the current implementation state.
- * - "Available Now": features demonstrably working in the seeded owner/attendant demos.
- * - "In Development & Validation": features with partial implementation or demo-only prototypes.
- * - "Future Direction": exploratory concepts without implementation.
+ * Category placement follows the founder's requested roadmap. The card copy
+ * stays within the current implementation: Offline Operations covers cash-only
+ * POS sales, and Demand Radar is a demo prototype. Those limits are stated in
+ * each card's note rather than hidden by the "Available Now" label.
  */
 const ROADMAP_TABS: readonly RoadmapTab[] = [
   {
@@ -908,9 +957,21 @@ const ROADMAP_TABS: readonly RoadmapTab[] = [
         body: 'Help pharmacy owners review relevant staff transactions, sales and stock information, including when they are away from the pharmacy. Role-based permissions help control access to sensitive business information.',
       },
       {
+        icon: WifiOff,
+        title: 'Offline Operations & Synchronisation',
+        body: 'Support essential pharmacy workflows during internet interruptions, with saved changes synchronised when connectivity returns. The experience depends on the operations supported by the current offline implementation.',
+        note: 'Core cash-only POS sales work offline; full offline catalogue, customer and stock operations remain in validation.',
+      },
+      {
         icon: RotateCcw,
         title: 'Returned-Product Management',
         body: 'Record returned products, document return reasons and quantities, and support appropriate stock and transaction adjustments. Returned products must not automatically become available for sale when their condition or suitability has not been established.',
+      },
+      {
+        icon: Radar,
+        title: 'Demand Radar — Unmet Medicine Requests',
+        body: 'Capture requests for medicines that are not currently in stock and identify recurring customer needs. Use these insights to guide future stocking and purchasing decisions.',
+        note: 'Demo prototype; live builds show a pilot notice and request capture is not yet a live feature.',
       },
     ],
   },
@@ -918,22 +979,12 @@ const ROADMAP_TABS: readonly RoadmapTab[] = [
     id: 'development',
     label: 'In Development & Validation',
     icon: FlaskConical,
-    gridClass: 'lg:grid-cols-3',
-    panelClass: '',
+    gridClass: 'lg:grid-cols-2',
+    panelClass: 'mx-auto max-w-4xl',
     iconClass: 'bg-navy-50 text-navy-700',
     lineClass: 'from-navy-700 via-navy-600 to-navy-700/30',
     hoverClass: 'hover:border-navy-700/40',
     features: [
-      {
-        icon: WifiOff,
-        title: 'Offline Operations & Synchronisation',
-        body: 'Core POS workflows (cash-only sales) work offline and sync when connectivity returns. Full offline catalogue, customer and stock operations are in validation. The experience depends on the operations supported by the current offline implementation.',
-      },
-      {
-        icon: Radar,
-        title: 'Demand Radar — Unmet Medicine Requests',
-        body: 'Prototype for capturing requests for medicines not in stock. The demo (`/demand-radar`) shows the concept with seeded requests; live builds show a pilot notice. Not yet a live feature.',
-      },
       {
         icon: Truck,
         title: 'Supplier Price Comparison & Smart Restocking',
@@ -1123,6 +1174,11 @@ function RoadmapSection() {
                         {feature.title}
                       </h3>
                       <p className="mt-2 text-sm leading-relaxed text-grey-700">{feature.body}</p>
+                      {feature.note && (
+                        <p className="mt-4 border-t border-border/70 pt-3 text-xs leading-relaxed text-grey-500">
+                          {feature.note}
+                        </p>
+                      )}
                     </article>
                   ))}
                 </div>
@@ -1130,6 +1186,249 @@ function RoadmapSection() {
             </div>
           );
         })}
+      </div>
+    </section>
+  );
+}
+
+/* ------------------------------------------------------------- pilot offer */
+
+const PILOT_POINTS = [
+  'A guided walkthrough of the current product.',
+  "A conversation about your pharmacy's workflow and priorities.",
+  'Clear scope on what is live, in validation and planned.',
+] as const;
+
+function PilotSection() {
+  return (
+    <section
+      id="pilot"
+      aria-labelledby="pilot-heading"
+      className="relative scroll-mt-24 overflow-hidden bg-gradient-to-br from-navy-900 via-navy-800 to-navy-700 text-white"
+    >
+      <FloatingMarks variant="cta" dark />
+
+      <div className="relative mx-auto max-w-6xl px-4 py-16 sm:px-6 lg:py-24">
+        <div className="grid gap-10 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)] lg:items-center lg:gap-12">
+          <div>
+            <p className="text-[11px] font-bold tracking-[0.16em] text-green-100 uppercase">
+              Pilot offer &amp; pricing
+            </p>
+
+            <h2
+              id="pilot-heading"
+              className="mt-3 max-w-2xl text-3xl font-bold tracking-tight text-white sm:text-4xl"
+            >
+              Be Part of the Next Chapter of Pharmacy Operations
+            </h2>
+
+            <p className="mt-4 max-w-2xl text-base leading-relaxed text-navy-100">
+              We're working with pharmacies to validate and improve PharmaFlow's workflows. Join
+              the pilot interest list to explore the product, share feedback, and help shape what
+              comes next.
+            </p>
+
+            <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+              <Button
+                render={<a href={DEMO_URL} target="_blank" rel="noopener noreferrer" />}
+                className="h-12 bg-green-700 px-6 text-base text-white hover:brightness-95"
+              >
+                Request a Demo
+                <ArrowUpRight aria-hidden />
+                <span className="sr-only">(opens in a new tab)</span>
+              </Button>
+
+              {WAITLIST_URL ? (
+                <Button
+                  variant="outline"
+                  render={
+                    <a href={WAITLIST_URL} target="_blank" rel="noopener noreferrer" />
+                  }
+                  className="h-12 border-white/30 bg-white/5 px-6 text-base text-white hover:bg-white/10 hover:text-white"
+                >
+                  Join the Waitlist
+                  <ArrowUpRight aria-hidden />
+                  <span className="sr-only">(opens in a new tab)</span>
+                </Button>
+              ) : (
+                <Button
+                  variant="outline"
+                  disabled
+                  aria-describedby="waitlist-note"
+                  className="h-12 border-white/25 bg-white/5 px-6 text-base text-white/70 hover:bg-white/5 hover:text-white/70"
+                >
+                  Join the Waitlist
+                </Button>
+              )}
+            </div>
+
+            {!WAITLIST_URL && (
+              <p
+                id="waitlist-note"
+                className="mt-3 max-w-xl text-xs leading-relaxed text-navy-100/80"
+              >
+                The waitlist form is not yet published. Request a demo to express interest in the
+                meantime.
+              </p>
+            )}
+          </div>
+
+          <div className="rounded-3xl border border-white/15 bg-white/[0.06] p-6 shadow-2xl shadow-navy-900/20 backdrop-blur sm:p-8">
+            <p className="text-[11px] font-bold tracking-[0.16em] text-green-100 uppercase">
+              What to expect
+            </p>
+
+            <ul className="mt-5 space-y-4">
+              {PILOT_POINTS.map((point) => (
+                <li key={point} className="flex gap-3">
+                  <span className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full bg-green-500/15 text-green-100">
+                    <CheckCircle2 className="size-3.5" aria-hidden />
+                  </span>
+                  <span className="text-sm leading-relaxed text-navy-100">{point}</span>
+                </li>
+              ))}
+            </ul>
+
+            <div className="mt-6 border-t border-white/10 pt-5">
+              <p className="text-sm font-semibold text-white">Pilot participation</p>
+              <p className="mt-1 text-sm leading-relaxed text-navy-100">
+                Pilot participation and future pricing will be discussed with interested
+                pharmacies.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ------------------------------------------------------------------- faqs */
+
+const FAQ_ITEMS = [
+  {
+    question: 'Who is PharmaFlow designed for?',
+    answer:
+      'PharmaFlow is being developed for small and medium-sized community pharmacies that want clearer visibility into sales, stock, staff activity, and day-to-day operations. Its broader vision also includes connecting participating pharmacies with customers.',
+  },
+  {
+    question: 'Can I monitor my pharmacy when I am away?',
+    answer:
+      'PharmaFlow is designed to help pharmacy owners review relevant operational information remotely. The information available depends on the features configured and working in the current version.',
+  },
+  {
+    question: 'Can PharmaFlow work without an internet connection?',
+    answer:
+      "Offline capability is an important part of PharmaFlow's development. The supported operations and synchronisation behaviour depend on the current implementation. Contact us to confirm whether your intended workflow is supported.",
+  },
+  {
+    question: 'Does PharmaFlow support medicine batches and expiry dates?',
+    answer:
+      'PharmaFlow is designed to help pharmacy teams track medicine batches and expiry information. The exact functionality available depends on the current product version.',
+  },
+  {
+    question: 'Can customers order medicines through PharmaFlow?',
+    answer:
+      "PharmaFlow's broader vision includes connecting customers with participating pharmacies for medicine discovery and ordering. Availability and order completion depend on the participating pharmacies and the workflows currently supported.",
+  },
+  {
+    question: 'How much does PharmaFlow cost?',
+    answer:
+      'Pricing is being refined as we validate the product and its value with pharmacies. Request a demo to discuss pilot participation and the available options.',
+  },
+  {
+    question: 'How can my pharmacy participate in the pilot?',
+    answer:
+      "Request a demo or join the waitlist to express your interest. We can then discuss your pharmacy's needs, the current product capabilities, and whether the pilot is a suitable fit.",
+  },
+  {
+    question: 'How does PharmaFlow protect pharmacy business information?',
+    answer:
+      'PharmaFlow is being developed with attention to access controls and the protection of sensitive business information. Contact us for details about the safeguards and data-handling practices applicable to the version you are considering.',
+  },
+] as const;
+
+function FaqSection() {
+  const [openIndex, setOpenIndex] = useState<number | null>(0);
+
+  return (
+    <section
+      id="faqs"
+      aria-labelledby="faqs-heading"
+      className="relative scroll-mt-24 overflow-hidden border-y border-border/60 bg-white"
+    >
+      <FloatingMarks variant="steps" />
+
+      <div className="relative mx-auto max-w-6xl px-4 py-16 sm:px-6 lg:py-24">
+        <SectionHeading
+          id="faqs-heading"
+          eyebrow="Frequently asked questions"
+          title="Questions About PharmaFlow?"
+          lede="Here are a few things pharmacy owners may want to know before exploring the platform."
+          align="center"
+        />
+
+        <div className="pf-reveal mx-auto mt-10 max-w-3xl overflow-hidden rounded-2xl border border-border bg-white shadow-sm">
+          {FAQ_ITEMS.map((faq, index) => {
+            const open = openIndex === index;
+
+            return (
+              <div key={faq.question} className="border-b border-border last:border-b-0">
+                <h3>
+                  <button
+                    type="button"
+                    id={`faq-question-${index}`}
+                    aria-expanded={open}
+                    aria-controls={`faq-panel-${index}`}
+                    onClick={() => setOpenIndex(open ? null : index)}
+                    className={cn(
+                      'flex w-full items-start justify-between gap-4 px-5 py-5 text-left transition-colors duration-200 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-green-700 sm:px-7 sm:py-6 motion-reduce:transition-none',
+                      open ? 'bg-green-50/50' : 'hover:bg-navy-50/70',
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        'text-[15px] font-semibold leading-snug sm:text-base',
+                        open ? 'text-green-700' : 'text-navy-900',
+                      )}
+                    >
+                      {faq.question}
+                    </span>
+                    <span
+                      className={cn(
+                        'mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full border transition-colors duration-200 motion-reduce:transition-none',
+                        open
+                          ? 'border-green-600/30 bg-green-100 text-green-700'
+                          : 'border-border bg-background text-navy-700',
+                      )}
+                    >
+                      <Plus
+                        className={cn(
+                          'size-4 transition-transform duration-200 motion-reduce:transition-none',
+                          open && 'rotate-45',
+                        )}
+                        aria-hidden
+                      />
+                    </span>
+                  </button>
+                </h3>
+
+                <div
+                  id={`faq-panel-${index}`}
+                  role="region"
+                  aria-labelledby={`faq-question-${index}`}
+                  data-open={open}
+                  hidden={!open}
+                  className="pf-faq-panel px-5 pb-5 sm:px-7 sm:pb-6"
+                >
+                  <p className="max-w-2xl text-sm leading-relaxed text-grey-700 sm:text-[15px]">
+                    {faq.answer}
+                  </p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
     </section>
   );
@@ -1174,8 +1473,7 @@ function DemoSection() {
         </Button>
 
         <p className="mx-auto mt-5 max-w-xl text-sm leading-relaxed text-navy-100">
-          A prototype with fictional sample data. Nothing you see or do there touches a real
-          pharmacy, and no order, payment or message reaches anyone.
+          Fictional sample data. Nothing you see or do there touches a real pharmacy.
         </p>
       </div>
     </section>
@@ -1205,6 +1503,7 @@ function SiteFooter() {
               { href: '#problem', label: 'The problem' },
               { href: '#platform', label: 'The solution' },
               { href: '#ecosystem', label: 'Who it connects' },
+              { href: '#validation', label: 'Validation' },
             ]}
           />
 
@@ -1212,6 +1511,9 @@ function SiteFooter() {
             title="Explore"
             items={[
               { href: '#how-it-works', label: 'How it works' },
+              { href: '#roadmap', label: 'Roadmap' },
+              { href: '#pilot', label: 'Pilot offer' },
+              { href: '#faqs', label: 'FAQs' },
               { href: '#demo', label: 'See the demo' },
             ]}
           />
@@ -1260,14 +1562,16 @@ function SectionHeading({
   eyebrow,
   title,
   lede,
+  align = 'left',
 }: {
   id: string;
   eyebrow: string;
   title: string;
   lede?: string;
+  align?: 'left' | 'center';
 }) {
   return (
-    <div className="max-w-2xl">
+    <div className={cn('max-w-2xl', align === 'center' && 'mx-auto text-center')}>
       <p className="text-[11px] font-bold tracking-[0.14em] text-green-700 uppercase">{eyebrow}</p>
       <h2
         id={id}

@@ -1,5 +1,6 @@
 import type { AppState } from './state';
 import { EXPIRY_WARNING_DAYS, type ExpiryBucket, type Medicine, type ReorderSuggestion, type Sale, type SaleSummary, type StockStatus } from './types';
+import { returnedValue } from './returns';
 import { add, daysUntil, money, multiply, percentOf, subtract, sum } from './money';
 
 /* ------------------------------------------------------------- stock status */
@@ -327,6 +328,8 @@ export function summariseSales(sales: Sale[]): SaleSummary {
   const gross = sum(counted.map((sale) => sale.subtotal));
   const discount = sum(counted.map((sale) => sale.discount));
   const net = sum(counted.map((sale) => sale.total));
+  const returned = sum(counted.map(returnedValue));
+  const netAfterReturns = Math.max(subtract(net, returned), 0);
   const outstanding = sum(
     counted
       .filter((sale) => sale.status === 'credit' || sale.status === 'part_paid')
@@ -343,6 +346,8 @@ export function summariseSales(sales: Sale[]): SaleSummary {
     gross,
     discount,
     net,
+    returned,
+    netAfterReturns,
     cost,
     margin: profit,
     marginPercent: profit === null ? null : percentOf(profit, net),

@@ -2,10 +2,19 @@ import { useCallback, useSyncExternalStore } from 'react';
 import type { PharmacyStatus, StaffRole } from '../db.types';
 import { SEED_BRANCH } from '~/domain/seed';
 import type { Branch } from '~/domain/state';
-import { isDemoMode, refreshSessionProfile } from '~/lib/session';
+import { isDemoMode, peekSession, refreshSessionProfile } from '~/lib/session';
 import { switchBranch, listAvailableBranches, type AvailableBranch } from './branches';
 import { fail, ok, type Result } from './result';
 import { client, hasSession, isSupabaseConfigured } from './client';
+import {
+  clearBranchSnapshot,
+  isOfflineBranchFailure,
+  readBranchSnapshot,
+  savedBranchForOffline,
+  writeBranchSnapshot,
+  type BranchSnapshotBranch,
+} from '~/offline/branch-snapshot';
+import { effectiveRole } from '~/offline/effective-role';
 
 /**
  * The active branch.
@@ -68,6 +77,20 @@ export interface ActiveBranchState {
   error: string | null;
   /** True while a switch is in flight, so the UI can disable itself. */
   switching: boolean;
+  /**
+   * Where the active branch came from. `cache` means a previously confirmed
+   * branch was used because the server could not be reached; it is usable for
+   * the POS safety net but is never presented as a fresh authorisation check.
+   */
+  source: 'server' | 'cache';
+  /** When the cached branch was last confirmed by the server, if source is cache. */
+  cachedAt: number | null;
+  /**
+   * Set when the current branch is usable online but could not be saved for an
+   * offline reload (for example, storage is full or blocked). This is a warning,
+   * not a reason to stop the online till.
+   */
+  snapshotError?: string | null;
 }
 
 const UNRESOLVED: ActiveBranchState = {
@@ -76,6 +99,8 @@ const UNRESOLVED: ActiveBranchState = {
   availableBranches: [],
   error: null,
   switching: false,
+  source: 'server',
+  cachedAt: null,
 };
 
 /**
@@ -112,6 +137,8 @@ function demoState(): ActiveBranchState {
     availableBranches: [seeded],
     error: null,
     switching: false,
+    source: 'server',
+    cachedAt: null,
   };
 }
 
@@ -130,6 +157,114 @@ function subscribe(listener: () => void) {
 }
 
 const getSnapshot = () => current;
+
+/* ------------------------------------------------------- saved branch */
+
+/**
+ * The user id carried by the local Supabase session.
+ *
+ * Deliberately `auth.getSession()`, not the editable profile cache: a snapshot
+ * may only be re-used by the same authenticated user, and the auth session is
+ * the closest local proof of that identity. Offline this still reads from the
+ * Supabase client's own storage; an expired/absent session returns null and the
+ * caller fails closed rather than trusting a cached role.
+ */
+async function localSessionUserId(): Promise<string | null> {
+  if (!isSupabaseConfigured()) return null;
+  try {
+    const { data, error } = await client().auth.getSession();
+    if (error) return null;
+    return data.session?.user.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function branchForSnapshot(branch: AvailableBranch): BranchSnapshotBranch {
+  return { ...branch, isDefault: true };
+}
+
+/** Persists a branch only after the server has confirmed it (and the role for it). */
+async function rememberConfirmedBranch(branch: AvailableBranch | undefined): Promise<string | null> {
+  if (!branch) return null;
+  const userId = await localSessionUserId();
+  if (!userId) return 'This device could not identify the saved session for offline use.';
+  // A storage failure must not break an otherwise valid online session. It only
+  // means this device will not be able to reopen the POS offline, which the UI
+  // reports rather than discovering after a reload.
+  const written = writeBranchSnapshot({
+    userId,
+    branch: branchForSnapshot(branch),
+    role: branch.role,
+  });
+  return written.ok ? null : (written.error ?? 'This device could not save the branch for offline use.');
+}
+
+/**
+ * Reconstructs the last confirmed branch when the server cannot be reached.
+ *
+ * This path is only taken for transport-shaped failures. A refusal from the
+ * server (expired JWT, missing profile, policy error) never falls back to the
+ * cache. The returned role is always `assistant`: the cached role is evidence of
+ * what the server once said, not authority to show owner-only data offline.
+ */
+async function restoreSavedBranch(failure: string): Promise<ActiveBranchState | null> {
+  if (!isOfflineBranchFailure(failure)) return null;
+
+  const userId = await localSessionUserId();
+  if (!userId) {
+    return {
+      status: 'error',
+      currentBranchId: null,
+      availableBranches: [],
+      error: 'Your saved sign-in has expired. Reconnect and sign in again before using the till.',
+      switching: false,
+      source: 'cache',
+      cachedAt: null,
+    };
+  }
+
+  // The POS local database is namespaced by the signed-in profile as well as
+  // the branch. An auth session without a readable cached profile has no local
+  // till identity, so opening a branch would render a POS that cannot record
+  // anything. Fail closed and ask for a reconnect.
+  if (peekSession().user?.id !== userId) {
+    return {
+      status: 'error',
+      currentBranchId: null,
+      availableBranches: [],
+      error: 'Your saved staff profile could not be loaded. Reconnect and sign in again before using the till.',
+      switching: false,
+      source: 'cache',
+      cachedAt: null,
+    };
+  }
+
+  const saved = readBranchSnapshot({ userId });
+  if (!saved.ok) {
+    return {
+      status: 'error',
+      currentBranchId: null,
+      availableBranches: [],
+      error: saved.error,
+      switching: false,
+      source: 'cache',
+      cachedAt: null,
+    };
+  }
+
+  const offlineBranch: AvailableBranch = savedBranchForOffline(saved.snapshot);
+
+  return {
+    status: 'ready',
+    currentBranchId: saved.snapshot.branchId,
+    availableBranches: [offlineBranch],
+    error: null,
+    switching: false,
+    source: 'cache',
+    cachedAt: saved.snapshot.confirmedAt,
+  };
+}
 
 /* --------------------------------------------------------------- resolving */
 
@@ -164,6 +299,14 @@ export async function resolveActiveBranch(): Promise<ActiveBranchState> {
   const selection = await listAvailableBranches();
 
   if (!selection.ok) {
+    // A transport failure may be recoverable from the last branch the server
+    // confirmed. Any other refusal is a real error and must not be papered over.
+    const restored = await restoreSavedBranch(selection.error);
+    if (restored) {
+      emit(restored);
+      return restored;
+    }
+
     // A signed-out session is not an error state here; the auth guard owns that.
     const state: ActiveBranchState = {
       status: selection.error === 'Not signed in' ? 'idle' : 'error',
@@ -171,6 +314,8 @@ export async function resolveActiveBranch(): Promise<ActiveBranchState> {
       availableBranches: [],
       error: selection.ok ? null : selection.error,
       switching: false,
+      source: 'server',
+      cachedAt: null,
     };
     emit(state);
     return state;
@@ -185,6 +330,8 @@ export async function resolveActiveBranch(): Promise<ActiveBranchState> {
       availableBranches: [],
       error: null,
       switching: false,
+      source: 'server',
+      cachedAt: null,
     });
     return current;
   }
@@ -203,6 +350,8 @@ export async function resolveActiveBranch(): Promise<ActiveBranchState> {
       availableBranches: branches,
       error: committed.error,
       switching: false,
+      source: 'server',
+      cachedAt: null,
     });
     return current;
   }
@@ -213,9 +362,13 @@ export async function resolveActiveBranch(): Promise<ActiveBranchState> {
     availableBranches: branches,
     error: null,
     switching: false,
+    source: 'server',
+    cachedAt: null,
   };
-  emit(state);
-  return state;
+  const snapshotError = await rememberConfirmedBranch(branches.find((b) => b.id === committed.data));
+  const resolved = { ...state, snapshotError };
+  emit(resolved);
+  return resolved;
 }
 
 /**
@@ -261,9 +414,13 @@ export async function switchActiveBranch(branchId: string): Promise<Result<Activ
     availableBranches: branches,
     error: null,
     switching: false,
+    source: 'server',
+    cachedAt: null,
   };
-  emit(state);
-  return ok(state);
+  const snapshotError = await rememberConfirmedBranch(branches.find((b) => b.id === result.data));
+  const resolved = { ...state, snapshotError };
+  emit(resolved);
+  return ok(resolved);
 }
 
 /* ------------------------------------------------------------------- reads */
@@ -307,6 +464,12 @@ export function activeRole(): StaffRole | null {
   return roleForBranch(current.currentBranchId);
 }
 
+/**
+ * Re-exported here so shell/POS callers have one branch-context import for the
+ * "cached branch is always assistant" rule.
+ */
+export { effectiveRole };
+
 export function activeBranch(): AvailableBranch | null {
   if (!current.currentBranchId) return null;
   return current.availableBranches.find((b) => b.id === current.currentBranchId) ?? null;
@@ -335,6 +498,7 @@ export function useCurrentBranchId(): string | null {
 
 /** Reset. Used by sign-out so the next session resolves from scratch. */
 export function resetActiveBranch(): void {
+  clearBranchSnapshot();
   emit(isDemoMode() ? demoState() : UNRESOLVED);
 }
 

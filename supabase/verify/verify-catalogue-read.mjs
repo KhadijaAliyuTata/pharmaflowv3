@@ -122,12 +122,12 @@ section('the write path is absent rather than present-and-broken');
 
 check(
   'createMedicine is no longer exported',
-  !/export async function createMedicine/.test(catalogCode),
+  !/export async function createMedicine\s*\(/.test(catalogCode),
   'writes are a later phase; a callable-looking write that always 42501s is worse',
 );
 check(
   'updateMedicine is no longer exported',
-  !/export async function updateMedicine/.test(catalogCode),
+  !/export async function updateMedicine\s*\(/.test(catalogCode),
 );
 check(
   'the absence is explained where a reader will look',
@@ -170,6 +170,14 @@ check(
 check(
   'a failed read surfaces as an error rather than falling back',
   /setError\('The product catalogue could not be loaded\.'\)/.test(hookCode),
+);
+check(
+  'a failed read settles as loading:false with the error, not an endless loading state',
+  /loading: false,\s*error,/.test(hookCode),
+);
+check(
+  'a cached-branch to server-branch transition triggers a fresh read',
+  /\[useRemote, currentBranchId, reloadToken, branchSource\]/.test(hookCode),
 );
 check(
   'a branch that failed to resolve is reported as an error',
@@ -460,21 +468,31 @@ check(
 section('catalogue writes are gated, not silently local');
 
 /**
- * The catalogue READS from Supabase but the write actions still rewrite
- * `state.medicines` in localStorage. Left clickable, "Adjust stock" on a real
- * product would have appeared to succeed, changed nothing in Postgres, and then
- * reverted on the next render. These assertions pin the gate that prevents it.
+ * The catalogue READS from Supabase. General catalogue writes still go through
+ * the demo store, so they remain unavailable in live mode: "Adjust stock" on a
+ * real product would otherwise appear to succeed, change nothing in Postgres,
+ * and revert on the next render. The one exception is the owner selling-price
+ * path, which writes through the authoritative `pf_update_medicine_price` RPC
+ * with an expected-price guard. These assertions pin both halves of that rule.
  *
  * The gate lives in the UI layer on purpose. The stronger place would be the store,
- * which cannot be bypassed by a caller that forgets to check � but `session.ts`
+ * which cannot be bypassed by a caller that forgets to check - but `session.ts`
  * imports `setPharmacyCurrentUser` from `~/store/pharmacy`, so a store import back
  * to `session.ts` would close a cycle. Disabling the controls is what actually stops
  * the click. The residual risk is a future caller using `usePharmacyActions()`
  * without consulting the gate; that is called out in the write-phase notes.
+ *
+ * The live price path is only usable once `20261020120000_returns_and_price_updates`
+ * has been applied. Until then the dialog surfaces the missing-RPC error rather
+ * than claiming the price changed.
  */
 const gate = await Bun.file(`${REPO}/src/lib/catalogue-writes.ts`).text();
 const inventorySrc = await Bun.file(`${REPO}/src/routes/_app/inventory.tsx`).text();
+const inventoryCode = code(inventorySrc);
 const unitEditorSrc = await Bun.file(`${REPO}/src/components/app/unit-editor.tsx`).text();
+const storeSrc = await Bun.file(`${REPO}/src/store/pharmacy.ts`).text();
+const operationsSrc = await Bun.file(`${REPO}/src/domain/operations.ts`).text();
+const localWritesCode = code([storeSrc, operationsSrc].join('\n'));
 const gateCode = code(gate);
 
 check(
@@ -492,11 +510,34 @@ check(
   !/DEMO_ALLOWED|__DEV_SERVER__|import\.meta\.env\.DEV/.test(gateCode),
   'a raw build flag would re-open this in every dev server against a real project',
 );
+const liveGateIndex = inventoryCode.indexOf('if (!writesAvailable && !livePrice)');
+const setPendingIndex = inventoryCode.indexOf('setPending(next)');
 check(
-  'the inventory action handler refuses before opening the dialog',
-  /if \(!writesAvailable\)[\s\S]{0,200}CATALOGUE_WRITE_UNAVAILABLE[\s\S]{0,200}return/.test(inventorySrc) &&
-    /setPending\(next\)/.test(inventorySrc),
-  'setPending must be unreachable in live mode, so no dialog can submit',
+  'stock, lock and recall still refuse in live mode before setPending',
+  /const livePrice = next\.kind === 'price' && isOwner && !writesAvailable;/.test(inventoryCode) &&
+    /if \(!writesAvailable && !livePrice\)[\s\S]{0,200}CATALOGUE_WRITE_UNAVAILABLE[\s\S]{0,200}return;/.test(
+      inventoryCode,
+    ) &&
+    liveGateIndex !== -1 &&
+    setPendingIndex > liveGateIndex,
+  'only the owner price action may bypass the gate; the other three return before a dialog can open',
+);
+
+const ownerGuardIndex = inventoryCode.indexOf('if (OWNER_ONLY[pending.kind] && !isOwner)');
+const offlineGuardIndex = inventoryCode.indexOf('navigator.onLine === false');
+const priceCallIndex = inventoryCode.indexOf('const result = await updateMedicinePrice({');
+check(
+  'the live price path is owner-only, online-only, and sends the expected price',
+  /const livePrice = live && pending\.kind === 'price';/.test(inventoryCode) &&
+    /const OWNER_ONLY: Record<Pending\['kind'\], boolean> = \{[\s\S]{0,80}price: true,/.test(
+      inventoryCode,
+    ) &&
+    ownerGuardIndex !== -1 &&
+    offlineGuardIndex > ownerGuardIndex &&
+    priceCallIndex > offlineGuardIndex &&
+    /updateMedicinePrice\(\{[\s\S]{0,240}expectedPrice,/.test(inventoryCode) &&
+    /p_expected_price: input\.expectedPrice/.test(catalogCode),
+  'a non-owner or offline attempt stops before the RPC; the RPC refuses a stale expected price',
 );
 check(
   'the inventory refusal is shown to the user, not swallowed',
@@ -508,10 +549,9 @@ check(
     /catalogueWritesAvailable/.test(unitEditorSrc),
 );
 check(
-  'no local medicine write action was given a Supabase implementation',
-  !/export async function updateMedicine/.test(catalogCode) &&
-    !/export async function createMedicine/.test(catalogCode),
-  'writes are a later phase; implementing them here would exceed the read scope',
+  'the local store/action layer exposes no general medicine create or update action',
+  !/\b(?:createMedicine|updateMedicine)\b/.test(localWritesCode),
+  'only the scoped price, stock, lock and recall actions remain local; updateMedicinePrice is a separate owner RPC',
 );
 check(
   'the read behaviour is untouched by the write gate',

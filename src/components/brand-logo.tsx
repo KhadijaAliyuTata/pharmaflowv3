@@ -75,7 +75,11 @@ export function BrandLogo({ tagline = false }: { tagline?: boolean }) {
             theme; `Flow` stays brand green, which reads on light and dark. */}
         <p className="text-base font-semibold tracking-tight">
           <span>Pharma</span>
-          <span className="text-green-600">Flow</span>
+          {/* `green-700`, not `green-600`: the literal brand green is 3.75:1 on
+              the page background at this size, and the wordmark is real text in
+              the accessibility tree even though it reads as a logo. The SVG
+              fills stay `green-600` — they are graphics, where 3:1 applies. */}
+          <span className="text-green-700">Flow</span>
         </p>
         {tagline && (
           <p className="text-[11px] text-muted-foreground">

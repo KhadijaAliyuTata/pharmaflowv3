@@ -32,7 +32,7 @@ export function NotFound() {
           </EmptyDescription>
         </EmptyHeader>
 
-        <Button variant="outline" render={<Link to="/" />}>
+        <Button variant="outline" render={<Link to="/dashboard" />}>
           <Home />
           Back to dashboard
         </Button>

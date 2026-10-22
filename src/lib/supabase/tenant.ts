@@ -125,6 +125,19 @@ export async function isStaff(): Promise<boolean> {
 }
 
 /**
+ * May this session review and publish shared clinical content?
+ *
+ * Owners are reviewers implicitly; a non-owner pharmacist gets the capability
+ * from `branch_memberships.can_review_clinical`. This is display gating only —
+ * every reviewer RPC re-checks `pf_can_review_clinical()` in the database.
+ */
+export async function canReviewClinical(): Promise<boolean> {
+  if (!isSupabaseConfigured() || !(await hasSession())) return false;
+  const { data, error } = await client().rpc('pf_can_review_clinical');
+  return !error && data === true;
+}
+
+/**
  * The caller's own branch record. Used for the header and settings screens.
  * `branches_read` returns the caller's branch, plus the whole directory for a
  * customer — so filter rather than assuming one row.

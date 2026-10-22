@@ -51,7 +51,7 @@ export function DefaultCatchBoundary({ error, reset }: ErrorComponentProps) {
               Try again
             </Button>
           )}
-          <Button variant="outline" render={<Link to="/" />}>
+          <Button variant="outline" render={<Link to="/dashboard" />}>
             <ArrowLeft />
             Back to dashboard
           </Button>

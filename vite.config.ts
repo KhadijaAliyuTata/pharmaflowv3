@@ -3,6 +3,9 @@ import { cloudflare } from '@cloudflare/vite-plugin';
 import { tanstackStart } from '@tanstack/react-start/plugin/vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+// The extension is load-bearing: `tsc` runs with `allowImportingTsExtensions`
+// (below) and Vite's config loader resolves the .ts source with this spelling.
+import { offlineShellPlugin } from './src/offline/sw-plugin.ts';
 import { fileURLToPath } from 'node:url';
 
 /**
@@ -12,7 +15,22 @@ import { fileURLToPath } from 'node:url';
  *   3. react()
  *   4. tailwindcss()
  */
-export default defineConfig(({ command }) => ({
+export default defineConfig(({ command, mode }) => {
+  // -------------------------------------------------------------- DEMO_BUILD
+  //
+  // A second compile-time constant, `true` only when Vite is invoked with
+  // `--mode demo` — the dedicated public demo build (`bun run build:demo`).
+  // It lets the investor demo render the seeded experiences from a PRODUCTION
+  // build without widening `__DEV_SERVER__`: an ordinary `vite build` sets
+  // `mode` to "production" here, so `__DEMO_BUILD__` folds to a literal `false`
+  // and the demo gate stays shut in the pilot/live bundle.
+  //
+  // Like `__DEV_SERVER__` it is derived from a build-mode signal (the Vite
+  // mode), never from an environment variable, so nothing that can influence an
+  // ordinary production build can turn it on.
+  const demoBuild = mode === 'demo';
+
+  return {
     // -------------------------------------------------------------- DEV_SERVER
     //
     // A compile-time constant that is `true` only when Vite is serving
@@ -36,6 +54,20 @@ export default defineConfig(({ command }) => ({
     //   dashboard setting — can make it true.
     define: {
       __DEV_SERVER__: JSON.stringify(command === 'serve'),
+      __DEMO_BUILD__: JSON.stringify(demoBuild),
+      // In the demo build the backend must be unreachable, not merely unused. A
+      // developer `.env`, a CI variable or a platform default would otherwise
+      // inline `PUBLIC_SUPABASE_*` into the demo bundle; they are overridden with
+      // empty strings so the demo artefact cannot carry a project URL or key.
+      // `resolveDeploymentMode` also fails closed if a value ever reappears, so
+      // the two guards cannot disagree in the unsafe direction.
+      ...(demoBuild
+        ? {
+            'import.meta.env.PUBLIC_SUPABASE_URL': JSON.stringify(''),
+            'import.meta.env.PUBLIC_SUPABASE_ANON_KEY': JSON.stringify(''),
+            'import.meta.env.PUBLIC_APP_URL': JSON.stringify(''),
+          }
+        : {}),
     },
   // Vite only exposes env vars matching `envPrefix` to client code, and the
   // default is `VITE_`. This project reads `PUBLIC_SUPABASE_*` from
@@ -48,6 +80,17 @@ export default defineConfig(({ command }) => ({
     tanstackStart(),
     react(),
     tailwindcss(),
+
+    // --------------------------------------------------------- OFFLINE SHELL
+    //
+    // `vite-plugin-pwa` + Workbox were evaluated first (approved Phase 0
+    // decision) and are a silent no-op in this stack: under
+    // `@cloudflare/vite-plugin` + TanStack Start's environment split two
+    // builds exited 0 but emitted no `sw.js`, no precache manifest and no
+    // workbox code anywhere in `dist`. The kept idea is the build-time
+    // precache manifest, which this plugin generates itself; the response-ok
+    // gating and never-cache rules live in the worker source it assembles.
+    offlineShellPlugin(),
   ],
   resolve: {
     alias: {
@@ -61,4 +104,5 @@ export default defineConfig(({ command }) => ({
       '~': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
-}));
+  };
+});

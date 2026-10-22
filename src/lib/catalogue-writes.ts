@@ -34,12 +34,13 @@ import { isDemoMode } from '~/lib/session';
  * ## What it covers on `/inventory`
  *
  * The panel is not only the catalogue. The same screen edits a stock count, a
- * selling price, a sale lock and a batch recall. All four — stock adjustment,
- * price edit, safety lock, batch recall — funnel through one `openAction`
- * handler, which consults this module before the dialog can open. They are
- * refused with the same message and the same "nothing has been changed" promise
- * as add/edit product, so a live build has one rule across the screen instead of
- * a rule per control.
+ * selling price, a sale lock and a batch recall. All four funnel through one
+ * `openAction` handler, which consults this module before the dialog can open.
+ * Stock adjustment, safety lock and batch recall are refused with the same
+ * message and the same "nothing has been changed" promise as add/edit product.
+ * The selling price is the exception: an owner may open it only through the
+ * owner-authorised `pf_update_medicine_price` RPC, with an expected-price guard.
+ * That RPC is available only after its migration is applied.
  *
  * ## Demo mode is unaffected
  *

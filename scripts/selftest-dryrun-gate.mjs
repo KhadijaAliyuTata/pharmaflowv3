@@ -12,11 +12,9 @@
  * ## The list is not duplicated here on purpose
  *
  * The expected filenames are READ from the .ps1 and from `supabase/migrations/`,
- * then compared to each other. Duplicating them in a third place is how the
- * safeguard and the repository drift apart in the first place: the gate was left
- * checking "exactly 17" while the folder grew to 20, and nothing failed because
- * the test carried its own copy of the same 17. Here, adding a migration to the
- * folder turns this test red until the .ps1's list is updated deliberately.
+ * then compared to each other. The offline-sale timestamp migration is explicitly
+ * outside this staging release; every other on-disk SQL migration must still be
+ * declared by the .ps1.
  */
 
 import { readFileSync, readdirSync } from 'node:fs';
@@ -26,11 +24,13 @@ const SOURCE = readFileSync('scripts/apply-staging-migrations.ps1', 'utf8');
 // The exact order the .ps1 declares.
 const block = /ExpectedMigrations\s*=\s*@\(([\s\S]*?)\)/.exec(SOURCE)?.[1] ?? '';
 const NAMES = [...block.matchAll(/'(\d{14}_\w+\.sql)'/g)].map((m) => m[1]);
+const OFFLINE_MIGRATION = '20261017120000_offline_sale_sold_at.sql';
 
 // What is actually on disk.
 const DISK = readdirSync('supabase/migrations')
   .filter((f) => f.endsWith('.sql'))
   .sort();
+const STAGING_DISK = DISK.filter((f) => f !== OFFLINE_MIGRATION);
 
 const STOP_PHRASES = [
   'Remote migration versions not found',
@@ -86,15 +86,23 @@ check(
   `parsed ${NAMES.length} name(s)`,
 );
 check(
-  NAMES.length === DISK.length,
-  'the .ps1 expects as many migrations as are on disk',
-  `declared ${NAMES.length}, on disk ${DISK.length}`,
+  DISK.includes(OFFLINE_MIGRATION),
+  'the offline sale timestamp migration exists on disk',
 );
 check(
-  NAMES.length === DISK.length && NAMES.every((n, i) => n === DISK[i]),
-  'the .ps1 list equals supabase/migrations/, in order',
-  NAMES.length === DISK.length && DISK.some((n, i) => n !== NAMES[i])
-    ? `first difference at index ${DISK.findIndex((n, i) => n !== NAMES[i])}`
+  !NAMES.includes(OFFLINE_MIGRATION),
+  'the offline sale timestamp migration is excluded from the staging release',
+);
+check(
+  NAMES.length === STAGING_DISK.length,
+  'the .ps1 expects as many staging migrations as are on disk',
+  `declared ${NAMES.length}, expected ${STAGING_DISK.length} after excluding ${OFFLINE_MIGRATION}`,
+);
+check(
+  NAMES.length === STAGING_DISK.length && NAMES.every((n, i) => n === STAGING_DISK[i]),
+  'the .ps1 list equals the staging migrations on disk, in order',
+  NAMES.length === STAGING_DISK.length && STAGING_DISK.some((n, i) => n !== NAMES[i])
+    ? `first difference at index ${STAGING_DISK.findIndex((n, i) => n !== NAMES[i])}`
     : '',
 );
 check(new Set(NAMES).size === NAMES.length, 'the .ps1 list has no duplicate names');

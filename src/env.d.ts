@@ -18,6 +18,17 @@
 declare const __DEV_SERVER__: boolean;
 
 /**
+ * Whether Vite built the dedicated public demo (`--mode demo`, `build:demo`).
+ *
+ * The second half of the demo gate, and the only way a PRODUCTION build may use
+ * seeded data. It is a build-mode signal like `__DEV_SERVER__`, not an
+ * environment variable, so it cannot be turned on by a CI variable, a copied
+ * `.env` or a platform setting. An ordinary `vite build` substitutes a literal
+ * `false`, which is what keeps the pilot/live bundle's demo paths dead code.
+ */
+declare const __DEMO_BUILD__: boolean;
+
+/**
  * Worker bindings `src/routes/api.send-invite.ts` reads at runtime.
  *
  * Declared here rather than in `wrangler.jsonc` on purpose. Those three are set

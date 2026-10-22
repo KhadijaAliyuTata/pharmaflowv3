@@ -35,6 +35,10 @@ const NEEDED_BY_AUTHENTICATED = {
   pf_current_role: 'policy',
   // Client-invoked.
   pf_set_active_branch: 'rpc',
+  pf_sale_returnable: 'rpc',
+  pf_create_return: 'rpc',
+  pf_review_return: 'rpc',
+  pf_update_medicine_price: 'rpc',
 };
 
 /** Data-changing functions that must never be directly callable by anyone. */
@@ -54,6 +58,8 @@ const MUST_NEVER_BE_CALLABLE = [
   'pf_medicine_state',
   'pf_handle_new_user',
   'pf_normalise_registration_numbers',
+  'pf_apply_return',
+  'pf_guard_void_with_returns',
 ];
 
 /**

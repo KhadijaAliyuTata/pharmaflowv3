@@ -17,9 +17,10 @@
  * this rewrite.
  *
  *   'live'  Supabase is configured. Real authentication, no demo path at all.
- *   'demo'  A DEVELOPMENT SERVER build, Supabase absent, and demo mode requested
- *           explicitly. Seeded accounts, no real data, banner on screen. This
- *           outcome does not exist in a production build.
+ *   'demo'  A development server OR the explicitly designated demo build, with
+ *           Supabase absent and demo mode requested. Seeded accounts, no real
+ *           data, banner on screen. An ordinary production build never reaches
+ *           this outcome.
  *   'broken' Everything else. Authentication is impossible and the app says so.
  *
  * ## Why demo mode is opt-in AND build-gated
@@ -37,6 +38,15 @@
  * it true. `define` is applied to every environment Vite builds, so it is a literal
  * `false` in both the client and the SSR/worker bundle — unlike `import.meta.env.DEV`,
  * which is left as a runtime lookup in the SSR bundle.
+ *
+ * ## The designated demo build
+ *
+ * The public investor demo is a PRODUCTION build, so it cannot lean on
+ * `__DEV_SERVER__`. It is instead its own explicit build profile: `vite build
+ * --mode demo` (`build:demo`), which makes a second build-mode constant,
+ * `__DEMO_BUILD__`, the literal `true` while every ordinary `vite build` leaves it
+ * `false`. That is what lets `isDemoMode()` be true in a demo artefact without
+ * widening the dev-server gate — see `IS_DEMO_BUILD` below.
  */
 
 export type DeploymentMode = 'live' | 'demo' | 'broken';
@@ -52,14 +62,30 @@ export type DeploymentMode = 'live' | 'demo' | 'broken';
 const IS_DEV_BUILD = __DEV_SERVER__ === true;
 
 /**
+ * Whether this is the designated public demo build, decided at BUILD time.
+ *
+ * `vite build --mode demo` (`build:demo`) makes this a literal `true`; every
+ * ordinary `vite build` and every `vite dev` makes it a literal `false`. It is the
+ * only way a production build may enter demo mode, and — like `IS_DEV_BUILD` — it
+ * is derived from a build-mode signal rather than an environment variable, so a CI
+ * variable, a copied `.env` or a platform dashboard default cannot enable it.
+ *
+ * The demo build also strips `PUBLIC_SUPABASE_*` at build time and the resolver
+ * below fails closed if a value survives, so "demo build" and "has a backend" can
+ * never both be true.
+ */
+const IS_DEMO_BUILD = __DEMO_BUILD__ === true;
+
+/**
  * The single constant every demo code path is gated on.
  *
- * Read as a necessary condition, never a sufficient one: it says "this bundle came
- * from a development server", not "demo mode is on". The two come apart on a dev
- * server that also has a real Supabase project configured, which is why callers use
- * `isDemoMode()` (this AND the resolved mode) rather than this constant alone.
+ * Read as a necessary condition, never a sufficient one: it says "this bundle may
+ * serve demo data" — from a development server or the designated demo build — not
+ * "demo mode is on". The two come apart on a dev server that also has a real
+ * Supabase project configured, which is why callers use `isDemoMode()` (this AND
+ * the resolved mode) rather than this constant alone.
  */
-export const DEMO_ALLOWED = IS_DEV_BUILD;
+export const DEMO_ALLOWED = IS_DEV_BUILD || IS_DEMO_BUILD;
 
 function resolveDeploymentMode(): DeploymentMode {
   const url = import.meta.env.PUBLIC_SUPABASE_URL;
@@ -68,13 +94,26 @@ function resolveDeploymentMode(): DeploymentMode {
   const urlPresent = typeof url === 'string' && url.trim().length > 0;
   const keyPresent = typeof anonKey === 'string' && anonKey.trim().length > 0;
 
+  // A demo build is a demo build and nothing else. The build strips
+  // `PUBLIC_SUPABASE_*` (see vite.config.ts); if a value is present anyway, fail
+  // closed rather than becoming either live OR demo — a demo artefact must never
+  // be able to reach a real backend, and it must not masquerade as one either.
+  if (IS_DEMO_BUILD && (urlPresent || keyPresent)) return 'broken';
+
   // Configured means BOTH halves. One without the other is a broken deployment,
   // not an absent one, and it is the case that used to slip into demo mode.
   if (urlPresent && keyPresent) return 'live';
 
-  // A production build has no demo mode at all. Not "disabled", not "requires a
-  // flag" — the branch does not exist, so there is nothing to set.
-  if (!IS_DEV_BUILD) return 'broken';
+  // An ordinary production build — neither a development server nor the
+  // designated demo build — has no demo mode at all. Not "disabled", not
+  // "requires a flag": the branch does not exist, so there is nothing to set.
+  if (!IS_DEMO_BUILD) {
+    if (!IS_DEV_BUILD) return 'broken';
+  }
+
+  // The designated demo build IS the opt-in, so it proceeds directly. A
+  // development server still needs the explicit flag on top of the build gate.
+  if (IS_DEMO_BUILD) return 'demo';
 
   // Development server only, and opt-in on top of that. `true` is the single
   // accepted affirmative value, so a typo disables demo rather than enabling a

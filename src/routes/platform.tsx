@@ -96,7 +96,7 @@ function PlatformShell() {
               If you believe you should have access, ask the platform operator to
               grant it. It cannot be granted from inside the app.
             </p>
-            <Button render={<Link to="/" />}>Back to your pharmacy</Button>
+            <Button render={<Link to="/dashboard" />}>Back to your pharmacy</Button>
           </CardContent>
         </Card>
       </div>
@@ -130,7 +130,7 @@ function PlatformShell() {
           </nav>
 
           <div className="ml-auto">
-            <Button variant="outline" size="sm" render={<Link to="/" />}>
+            <Button variant="outline" size="sm" render={<Link to="/dashboard" />}>
               My pharmacy
             </Button>
           </div>

@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { Navigate, createFileRoute } from '@tanstack/react-router';
+import { Link, Navigate, createFileRoute } from '@tanstack/react-router';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -65,7 +65,7 @@ function Login() {
   // instead of a form nobody may use, and anyone signed in is replaced by a
   // redirect. The effect that resolves the session runs in the same commit as
   // this one, so a signed-in user does not normally see either.
-  if (status === 'authenticated') return <Navigate to="/" />;
+  if (status === 'authenticated') return <Navigate to="/dashboard" />;
   if (status === 'loading' && mounted) return <LoginSkeleton />;
 
   // A deployment that cannot authenticate at all gets a diagnosis instead of a
@@ -234,6 +234,15 @@ function StaffSignInForm() {
               form.setValue('password', 'demo', { shouldValidate: true });
             }}
           />
+        )}
+
+        {/* One-click investor demo hub — demo mode only; folds away in production. */}
+        {isDemoMode() && (
+          <p className="text-center text-sm">
+            <Link to="/demo" className="font-semibold text-primary hover:underline">
+              Explore the PharmaFlow demo (no password) →
+            </Link>
+          </p>
         )}
       </form>
     </Form>

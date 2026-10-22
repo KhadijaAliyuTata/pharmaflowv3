@@ -15,8 +15,11 @@ been migrated or validated, and the first database action awaits approval.** See
 
 ### 1.1 The full chain
 
-There are 20 migrations. **None** has ever been applied to a real Postgres
-server; all of them have only ever been verified against PGlite.
+There are 23 migrations in the staging chain. **None** has ever been applied to
+a real Postgres server; all of them have only ever been verified against PGlite.
+The offline-sale timestamp migration (`20261017120000_offline_sale_sold_at.sql`)
+is deliberately outside this staging release, so the folder contains 24 files
+but only 23 are expected by the gate.
 
 | # | Migration | Lines | Applied anywhere? |
 |---|---|---|---|
@@ -40,16 +43,85 @@ server; all of them have only ever been verified against PGlite.
 | 18 | `20261012150000_redeem_invitation_idempotent.sql` | 177 | no |
 | 19 | `20261012160000_redeem_invitation_check_order.sql` | 162 | no |
 | 20 | `20261012170000_receive_stock.sql` | 294 | no |
+| 21 | `20261018120000_pos_payments_split.sql` | 830 | no |
+| 22 | `20261019120000_medicine_knowledge_base.sql` | 2294 | no |
+| 23 | `20261020120000_returns_and_price_updates.sql` | 1480 | no |
 
-> All 20 are tracked and committed. Earlier revisions of this document listed 17
-> and flagged the last three as untracked; that is no longer true, and the exact
-> chain is now pinned by `scripts/apply-staging-migrations.ps1` (an explicit
-> ordered list) and asserted against `supabase/migrations/` by
-> `scripts/selftest-dryrun-gate.mjs`.
+> The first 20 are tracked and committed. Rows 21–23 are currently
+> uncommitted working-tree files; they must be reviewed and committed before any
+> staging apply. The exact chain is pinned by
+> `scripts/apply-staging-migrations.ps1` (an explicit ordered list) and asserted
+> against `supabase/migrations/` by `scripts/selftest-dryrun-gate.mjs`, which
+> excludes only the offline timestamp migration.
+
+### 1.1.1 What the three newest staging migrations add
+
+`20261018120000_pos_payments_split.sql` is the existing split-payment POS work.
+It adds `sale_payments` and redefines the checkout and customer-payment
+functions. It is included because the staging chain must match the code that is
+about to be validated; it is not part of the medicine knowledge-base change.
+
+`20261019120000_medicine_knowledge_base.sql` is Phase 1 of the medicine
+catalogue. It adds:
+
+- shared catalogue tables (`medicine_products` and its ingredient, source,
+  clinical-section, dosage, alias, revision and audit children);
+- tenant-scoped `medicine_submissions` and `pharmacy_medicine_aliases`, plus the
+  nullable `medicines.catalogue_product_id` link;
+- a branch-membership `can_review_clinical` capability, with owner-only grants;
+- RLS separating the globally readable verified catalogue from tenant/reviewer
+  drafts and submissions;
+- reviewer RPCs for clinical status, registration status, archive/restore and
+  submission acceptance;
+- `pf_search_medicine_catalogue` and `pf_medicine_duplicate_candidates`;
+- service-role-only import staging tables.
+
+The migration itself does **not** add the importer or any catalogue rows.
+Clinical and registration verification remain separate. No record may be
+verified without a source and a named reviewer, and no verified product may be
+overwritten by accepting a submission. Acceptance also refuses a submission
+with no prescription class or no primary-source retrieval date, rather than
+defaulting an unclassified product to OTC or back-filling today's date. These
+rules are enforced in the database and covered by
+`supabase/verify/verify-medicine-catalogue.mjs`.
+
+Phase 2 is application code only and adds no migration: the `Medicine info`
+screen now separates the shared `Reference catalogue` from the tenant-scoped
+`My pharmacy` dossier, and owners can submit a missing product for review. In
+demo mode the shared catalogue is explicitly unavailable rather than populated
+with fictional clinical records. The pure UI rules are checked separately by
+`bun run verify:medicine-ui`.
+
+`20261020120000_returns_and_price_updates.sql` adds persistent customer returns
+and the authoritative selling-price write path:
+
+- linked `medicine_returns`, `medicine_return_items` and
+  `medicine_return_allocations`, with an append-only `medicine_price_changes`
+  audit ledger;
+- `sales.returned_credit`, a separate accepted-return credit that never rewrites
+  the original sale total, payment or lines;
+- `pf_sale_returnable`, `pf_create_return` and `pf_review_return`, including
+  owner completion, attendant pending review, idempotency, remaining-quantity
+  checks, original-lot restoration and quarantine for damaged, expired, recalled
+  or unprovenanced stock;
+- `pf_update_medicine_price`, owner-only, unit-specific, stale-price-safe and
+  cost/batch/expiry-preserving;
+- a void guard that refuses a sale with any recorded return, preventing a second
+  stock restoration.
+
+The return/pricing rules are covered by
+`supabase/verify/verify-returns-and-price-updates.mjs`, and the client-side
+receipt, return and price rules by `bun run verify:returns-price-ui`.
+
+Expected post-apply counts for the 23-migration chain are **37 public tables, 8
+public views, 70 `pf_*` functions and 20 enums**. These counts were measured by
+applying the staging chain (the full folder minus the offline migration) to a
+fresh PGlite database; they are not estimates.
 
 ### 1.2 Ordering
 
-Apply **all 20 in filename order**. Filename sort *is* the correct order.
+Apply **all 23 in filename order**. Filename sort *is* the correct order. The
+offline timestamp migration is not in this chain and must not be added to it.
 
 Constraints inside that order:
 
@@ -227,7 +299,7 @@ first migration.
 It should work: `pgcrypto` is a *trusted* extension, so the database owner may
 install it, and the session pooler connects as `postgres`. But if Supabase has it
 disabled or pre-installed elsewhere it will fail, and it will fail on migration
-**1 of 20**.
+**1 of 23**.
 
 **If it fails**, nothing is lost — `db push` runs each migration in its own
 transaction, so the failure leaves an empty database. Fix it by installing the
@@ -611,7 +683,8 @@ The guard **cannot** precede the connection; a `SET` needs a session. What
 matters, and what is asserted, is that it precedes *every read*.
 
 **Why the guard is load-bearing, not decoration.** No migration in this
-repository uses `FORCE ROW LEVEL SECURITY` - 0 occurrences, while 19 enable RLS.
+repository uses `FORCE ROW LEVEL SECURITY` - 0 occurrences, while every
+application table enables RLS.
 The session-pooler user `postgres.<ref>` maps to `postgres`, which **owns** these
 tables and therefore **bypasses RLS outright**. RLS is not a backstop for this
 connection; the session guard is.
@@ -646,7 +719,7 @@ The pre-apply gate is the deliberate inverse: only `0` passes there.
 
 #### Why the second dry run checks its own exit code
 
-The pre-apply dry run requires **the exact expected set of 20** pending
+The pre-apply dry run requires **the exact expected set of 23** pending
 migrations, in order, so an errored command names nothing and is caught by that
 comparison. The post-apply check is the inverse - it requires **zero** - and a
 dry run that *fails* also names zero.
@@ -716,7 +789,7 @@ fabricated inputs:
 - **`assessFreshness`, fresh states (4):** no `supabase_migrations` schema ·
   schema without table · `schema_migrations` present and empty · views-only,
   which must stay fresh but be reported
-- **`assessFreshness`, must-fail states (4):** 20 migrations recorded · records
+- **`assessFreshness`, must-fail states (4):** 23 migrations recorded · records
   with no tables · stray `pf_*` functions · tables with no history
 - **`classifyError` (7):** `42P01` is *catalog*, never auth or network
 - **Wrong-target refusal, end to end (9):** production in a pooler username ·
@@ -731,7 +804,7 @@ fabricated inputs:
 supabase --workdir . db push --dry-run --db-url $env:PGURI --skip-vault
 ```
 
-Expected: the **20 migrations** listed as pending, resolved from
+Expected: the **23 migrations** listed as pending, resolved from
 `supabase/migrations/` — which `--workdir .` pins explicitly, with no ancestor
 search. Nothing is applied.
 
@@ -739,7 +812,7 @@ search. Nothing is applied.
 
 | In the output | Meaning |
 |---|---|
-| fewer than 20 | some migration is not being picked up — investigate before applying |
+| fewer than 23 | some migration is not being picked up - investigate before applying |
 | "remote migration versions not found in local migrations directory" | the target already has history this chain does not know about |
 | any mention of the production project | the target is wrong — stop |
 | a list of migrations *already applied* | you are pointed at a migrated database |
@@ -770,33 +843,33 @@ supabase --workdir . db push --dry-run --db-url $env:PGURI --skip-vault
 
 **Expected effects, precisely.**
 
-*During:* each of the 20 migrations runs in its own transaction. If one fails,
-that migration rolls back and the earlier 19 stand. Staging ends up partially
+*During:* each of the 23 migrations runs in its own transaction. If one fails,
+that migration rolls back and the earlier 22 stand. Staging ends up partially
 migrated, and the failure message names the statement.
 
 *After a full success:*
 
 | | |
 |---|---|
-| `supabase_migrations.schema_migrations` | created, **20 rows** |
-| tables in `public` | **19** |
+| `supabase_migrations.schema_migrations` | created, **23 rows** |
+| tables in `public` | **37** |
 | views in `public` | **8** (4 cost, `pf_my_branches`, 3 `pf_platform_*`) |
-| `pf_*` functions in `public` | **38** (before it was 0) |
-| enums | **11**, including the new `pharmacy_status` |
+| `pf_*` functions in `public` | **70** (before it was 0) |
+| enums | **20**, including `pharmacy_status` and the medicine catalogue enums |
 | data rows | **0** — no migration seeds anything |
 
 *Verification without a migration command* — the Supabase SQL editor against
 staging, or the read-only script:
 
 ```sql
-select count(*) as migrations from supabase_migrations.schema_migrations;   -- 20
+select count(*) as migrations from supabase_migrations.schema_migrations;   -- 23
 select count(*) as tables     from information_schema.tables
-  where table_schema = 'public' and table_type = 'BASE TABLE';             -- 19
+  where table_schema = 'public' and table_type = 'BASE TABLE';             -- 37
 select count(*) as views      from information_schema.views
   where table_schema = 'public';                                           -- 8
 select count(*) as pf_fns     from pg_proc p
   join pg_namespace n on n.oid = p.pronamespace
-  where n.nspname = 'public' and p.proname like 'pf\_%';                   -- 38
+  where n.nspname = 'public' and p.proname like 'pf\_%';                   -- 70
 select status, count(*) from branches group by status;                     -- no rows
 ```
 
@@ -804,7 +877,7 @@ select status, count(*) from branches group by status;                     -- no
 correct — `branches` exists but is empty, because no migration seeds a pharmacy.
 
 > `--include-all` exists for pushing migrations missing from the remote history
-> table. **Do not add it on the first run.** All 20 are new to staging, so the
+> table. **Do not add it on the first run.** All 23 are new to staging, so the
 > plain command should already list all of them; if it does not, that is a signal
 > to stop and investigate, not a flag to reach for.
 
@@ -1042,7 +1115,7 @@ This is the highest-value test in the whole document.
 
 ---
 
-## 6. Running the 19 suites against real Postgres
+## 6. Running the 27 suites against real Postgres
 
 ### 6.1 The current state, stated plainly
 
@@ -1077,7 +1150,7 @@ implementation, which is out of scope for this task.
 
 ### 6.2 Split by kind
 
-19 suites total: **15 database**, **4 pure logic**.
+27 suites total: **23 database**, **4 pure logic**.
 
 | Suite | Kind |
 |---|---|
@@ -1096,6 +1169,14 @@ implementation, which is out of scope for this task.
 | `verify-stock-authority` | database |
 | `verify-tenant-isolation` | database |
 | `verify-void-sale` | database |
+| `verify-medicine-catalogue` | database |
+| `verify-offline-local-db` | database |
+| `verify-offline-pos` | database |
+| `verify-offline-probe` | database |
+| `verify-offline-sale-timestamps` | database |
+| `verify-offline-sync` | database |
+| `verify-pos-sale-payments` | database |
+| `verify-returns-and-price-updates` | database |
 | `verify-accept-invite` | **logic** |
 | `verify-auth-modes` | **logic** |
 | `verify-invite-email` | **logic** |
@@ -1105,8 +1186,16 @@ The four logic suites never import `harness.mjs`. They exercise request parsing,
 validation and email templates with no database at all, so they are **already
 Postgres-independent** and need no staging configuration.
 
+The Phase 2 medicine UI has a separate offline check, not counted above:
+`bun run verify:medicine-ui` imports the same domain functions as the screen and
+covers source/date validation, safe source URLs, submission payloads,
+pagination and duplicate blocking. The Phase 3 return and price screens have a
+parallel check, `bun run verify:returns-price-ui`, covering return state,
+partial/full handling, credit/refund presentation, offline refusal and the
+single authoritative price path.
+
 `audit-phase0-final.mjs` is in the directory but is not named `verify-*`, so
-`run-all.mjs` does not pick it up. It is not one of the 19.
+`run-all.mjs` does not pick it up. It is not one of the 27.
 
 ### 6.3 What a real-Postgres adapter would need
 
@@ -1120,8 +1209,8 @@ Roughly, so the cost is known before committing to it:
    change** in the harness and may surface genuine new failures.
 4. `gen_random_uuid()` would come from real `pgcrypto`; the substitution must be
    disabled on that path, or tokens are not what they would be in production.
-5. Suites must target a **disposable** database. Applying the full 20-migration
-   chain per suite group needs 15 clean databases, or a reset function between
+5. Suites must target a **disposable** database. Applying the full 23-migration
+   chain per suite group needs 16 clean databases, or a reset function between
    them.
 
 Item 3 is the one to watch: the harness's current isolation is *weaker* than real
@@ -1179,9 +1268,10 @@ Tracked as separate follow-up work.
 | 4 | `PUBLIC_APP_URL` match between `.env` and the Worker secret unverified | medium | staging only — E2 |
 | 5 | `pf_grant_platform_admin` under the new API key format unverified | medium | staging first - §3.5 step 4 |
 | 6 | `pf_void_sale` and `pf_revoke_invitation` under suspension have no assertion | low | optional on staging |
-| 7 | ~~Migrations 15–17 are untracked~~ **resolved** — all 20 files are tracked and committed | none | done |
+| 7 | ~~Migrations 15–17 are untracked~~ **resolved** — the first 20 files are tracked and committed | none | done |
 | 8 | Concurrency (`for update`) never exercised | medium | staging only — §5.4 |
+| 9 | The three newest staging migrations (`pos_payments_split`, `medicine_knowledge_base`, `returns_and_price_updates`) are uncommitted working-tree files | **hard stop for staging** | review and commit before §3.4 |
 
 **Nothing here was executed.** No migration applied, no deploy, no commit, no
-push, no secret touched, no platform-admin role granted. The 20-migration chain
-has still never been applied to any Postgres server.
+push, no secret touched, no platform-admin role granted. The 23-migration staging
+chain has still never been applied to any Postgres server.

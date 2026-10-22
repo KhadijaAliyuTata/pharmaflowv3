@@ -358,6 +358,9 @@ export function createReporter(suiteName) {
     } else {
       fail++;
       failures.push(name);
+      // Set this immediately so a suite that forgets to use finish()'s return
+      // value still exits non-zero instead of reporting a false green.
+      process.exitCode = 1;
       console.log(`  FAIL  ${name}${detail ? ` -> ${detail}` : ''}`);
     }
   };
@@ -370,7 +373,10 @@ export function createReporter(suiteName) {
 
   const finish = async (db) => {
     console.log(`\n${suiteName}: ${pass} passed, ${fail} failed`);
-    if (failures.length) console.log(`  failing: ${failures.join(' | ')}`);
+    if (failures.length) {
+      process.exitCode = 1;
+      console.log(`  failing: ${failures.join(' | ')}`);
+    }
     try {
       await db?.close();
     } catch {

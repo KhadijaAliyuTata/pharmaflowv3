@@ -1,9 +1,10 @@
 /**
  * TypeScript types for the PharmaFlow Supabase schema.
  *
- * Mirrors `supabase/migrations/20261002160000_initial_schema.sql`. Every column,
- * enum value, view and function here was read out of that migration — nothing is
- * invented. Regenerate after a schema change with:
+ * Mirrors the initial schema plus the later migrations in this repository. The
+ * medicine catalogue additions were transcribed from
+ * `20261019120000_medicine_knowledge_base.sql`; nothing is invented. Regenerate
+ * after a schema change with:
  *
  *   supabase gen types typescript --local > src/lib/db.types.ts
  *
@@ -36,13 +37,39 @@ export type PharmacyStatus = 'pending' | 'active' | 'suspended';
 export type StockState = 'in_stock' | 'low_stock' | 'out_of_stock' | 'expiring_soon' | 'expired';
 export type ReceiptState = 'pending_pricing' | 'confirmed';
 export type SaleState = 'paid' | 'part_paid' | 'credit' | 'refunded' | 'voided';
-export type PaymentKind = 'cash' | 'transfer' | 'pos_card' | 'wallet';
+/** 20261018120000 adds 'split' (two methods collected on one sale). */
+export type PaymentKind = 'cash' | 'transfer' | 'pos_card' | 'wallet' | 'split';
 export type MovementKind = 'receipt' | 'sale' | 'adjustment' | 'return' | 'void' | 'disposal';
 export type OrderState =
   | 'pending_review' | 'confirmed' | 'ready_for_pickup'
   | 'out_for_delivery' | 'completed' | 'cancelled';
 export type RequestState = 'pending_restock' | 'restocked' | 'notified';
 export type UrgencyLevel = 'routine' | 'urgent' | 'emergency';
+
+/* ------------------------------------------------ shared medicine catalogue */
+/** From 20261019120000_medicine_knowledge_base. */
+export type MedicineVerificationStatus =
+  | 'draft' | 'pending_review' | 'verified' | 'rejected' | 'outdated';
+export type MedicineRegistrationStatus =
+  | 'unverified' | 'pending' | 'verified' | 'mismatch' | 'not_applicable';
+export type ClinicalSectionStatus =
+  | 'not_established' | 'not_verified' | 'verified' | 'not_applicable';
+export type ClinicalSection =
+  | 'indications' | 'dosage' | 'administration' | 'food'
+  | 'contraindications' | 'precautions' | 'common_adverse_effects'
+  | 'serious_adverse_effects' | 'interactions' | 'pregnancy' | 'breastfeeding'
+  | 'paediatric' | 'older_adult' | 'renal' | 'hepatic' | 'storage'
+  | 'warnings' | 'professional_assessment';
+export type MedicineSourceType =
+  | 'product_label' | 'regulator' | 'guideline' | 'reference' | 'manufacturer' | 'other';
+export type MedicineFoodInstruction =
+  | 'with_food' | 'before_food' | 'after_food' | 'without_regard_to_food'
+  | 'not_established' | 'not_applicable';
+export type MedicineSubmissionStatus =
+  | 'draft' | 'submitted' | 'under_review' | 'accepted' | 'rejected' | 'withdrawn';
+export type MedicineImportStatus =
+  | 'pending' | 'valid' | 'duplicate' | 'rejected' | 'imported' | 'needs_review';
+export type MedicineAliasType = 'brand' | 'synonym' | 'common_name' | 'misspelling';
 
 /**
  * `medicines.units` is a jsonb array, not a table.
@@ -169,6 +196,12 @@ export type MedicineRow = {
   do_not_sell_locked_at: string | null;
   nafdac_reg_number: string | null;
   manufacturer: string | null;
+  /**
+   * Optional link to the shared clinical catalogue, added by
+   * 20261019120000_medicine_knowledge_base. Nullable: an inventory row does not
+   * need a shared dossier, and linking is owner/reviewer-only in the database.
+   */
+  catalogue_product_id?: string | null;
   /** Maintained by `pf_medicine_state`. */
   state: StockState;
   created_at: string;
@@ -266,6 +299,14 @@ export type SaleRow = {
   state: SaleState | null;
   amount_paid: number;
   outstanding: number;
+  /**
+   * The portion of accepted returns applied against `outstanding`.
+   *
+   * The original total, amount paid and outstanding are never rewritten by a
+   * return. Effective outstanding is `outstanding - returned_credit`. See
+   * 20261020120000_returns_and_price_updates.sql.
+   */
+  returned_credit: number;
   dispensed_against_prescription: boolean;
   status_reason: string | null;
   status_changed_by: string | null;
@@ -332,6 +373,115 @@ export type CreditLedgerRow = {
   recorded_by: string;
 }
 
+/**
+ * One payment against a sale, from 20261018120000_pos_payments_split.
+ *
+ * Append-only audit: the split parts of the collected money at checkout, and
+ * every repayment afterwards, each row carrying its method, amount and the
+ * staff member. `sales.amount_paid` remains the money of record.
+ */
+export type SalePaymentRow = {
+  id: string;
+  sale_id: string;
+  branch_id: string;
+  method: PaymentKind;
+  amount: number;
+  recorded_by: string;
+  recorded_at: string;
+  note: string | null;
+}
+
+export type SalePaymentInsert = {
+  sale_id: string;
+  branch_id: string;
+  method: PaymentKind;
+  amount: number;
+  recorded_by?: string;
+  recorded_at?: string;
+  note?: string | null;
+}
+
+/* ------------------------------------------------------- returns, 20261020 */
+
+export type MedicineReturnStatus = 'pending_review' | 'completed' | 'rejected';
+
+export type MedicineReturnReason =
+  | 'wrong_medicine'
+  | 'damaged'
+  | 'customer_changed_mind'
+  | 'expired'
+  | 'recalled'
+  | 'other';
+
+export type MedicineReturnMethod =
+  | 'cash'
+  | 'transfer'
+  | 'pos_card'
+  | 'wallet'
+  | 'store_credit'
+  | 'not_refunded';
+
+export type MedicineReturnRow = {
+  id: string;
+  branch_id: string;
+  sale_id: string;
+  return_number: string;
+  status: MedicineReturnStatus;
+  reason: MedicineReturnReason;
+  note: string;
+  idempotency_key: string | null;
+  requested_by: string;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  review_note: string | null;
+  completed_at: string | null;
+  refund_value: number;
+  credit_applied: number;
+  refund_amount: number;
+  refund_method: MedicineReturnMethod | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MedicineReturnItemRow = {
+  id: string;
+  return_id: string;
+  sale_item_id: string;
+  medicine_id: string;
+  quantity: number;
+  base_units_total: number;
+  unit_price: number;
+  line_total: number;
+  return_value: number;
+  restocked_units: number;
+  quarantined_units: number;
+  created_at: string;
+};
+
+export type MedicineReturnAllocationRow = {
+  id: string;
+  return_item_id: string;
+  batch_id: string | null;
+  base_units: number;
+  disposition: 'restocked' | 'quarantined';
+  note: string;
+  created_at: string;
+};
+
+export type MedicinePriceChangeRow = {
+  id: string;
+  branch_id: string;
+  medicine_id: string;
+  unit_key: string;
+  unit_name: string;
+  unit_multiplier: number;
+  old_price: number;
+  new_price: number;
+  reason: string;
+  changed_by: string;
+  changed_at: string;
+};
+
 export type CustomerOrderRow = {
   id: string;
   branch_id: string;
@@ -376,6 +526,297 @@ export type MedicineRequestRow = {
   recorded_by: string;
   notified_at: string | null;
 }
+
+/* ------------------------------------------- shared medicine catalogue rows */
+/**
+ * The global clinical catalogue, from 20261019120000_medicine_knowledge_base.
+ *
+ * A product is shared across pharmacies. It is deliberately not a `medicines`
+ * row: stock, price, batches and expiry stay tenant-scoped. Registration
+ * verification and clinical review are separate facts, and both may be
+ * `unverified`/`not_verified` without pretending the record is safe.
+ */
+export type MedicineProductRow = {
+  id: string;
+  identity_key: string;
+  generic_name: string;
+  brand_name: string | null;
+  product_name: string;
+  strength_text: string;
+  dosage_form: string;
+  route: string;
+  pack_size: string | null;
+  manufacturer: string | null;
+  marketing_authorisation_holder: string | null;
+  nafdac_reg_number: string | null;
+  nafdac_registration_status: MedicineRegistrationStatus;
+  nafdac_verified_at: string | null;
+  category: string;
+  prescription_class: PrescriptionClass;
+  is_combination: boolean;
+  generic_product_id: string | null;
+  clinical_review_status: MedicineVerificationStatus;
+  clinical_reviewed_by: string | null;
+  clinical_reviewed_at: string | null;
+  last_clinical_review_date: string | null;
+  version: number;
+  archived_at: string | null;
+  archived_by: string | null;
+  archive_reason: string | null;
+  created_by: string | null;
+  updated_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MedicineIngredientRow = {
+  id: string;
+  product_id: string;
+  ingredient_name: string;
+  strength_value: number | null;
+  strength_unit: string | null;
+  sort_order: number;
+  created_at: string;
+};
+
+export type MedicineSourceRow = {
+  id: string;
+  product_id: string | null;
+  section: ClinicalSection | null;
+  source_type: MedicineSourceType;
+  title: string;
+  publisher: string | null;
+  url: string | null;
+  document_reference: string | null;
+  retrieved_at: string;
+  /** Client-local reference used to link a submission's sections and dosages. */
+  source_ref: string | null;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
+};
+
+export type MedicineClinicalSectionRow = {
+  id: string;
+  product_id: string;
+  section: ClinicalSection;
+  content: string;
+  status: ClinicalSectionStatus;
+  food_instruction: MedicineFoodInstruction | null;
+  source_id: string | null;
+  retrieved_at: string | null;
+  last_reviewed_at: string | null;
+  reviewed_by: string | null;
+  version: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MedicineDosageRow = {
+  id: string;
+  product_id: string;
+  population: string;
+  indication: string | null;
+  route: string | null;
+  dose_text: string | null;
+  frequency: string | null;
+  duration: string | null;
+  max_dose: string | null;
+  notes: string | null;
+  status: ClinicalSectionStatus;
+  source_id: string | null;
+  retrieved_at: string | null;
+  last_reviewed_at: string | null;
+  reviewed_by: string | null;
+  version: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MedicineProductAliasRow = {
+  id: string;
+  product_id: string;
+  alias: string;
+  alias_type: MedicineAliasType;
+  source_id: string | null;
+  created_at: string;
+};
+
+export type MedicineSourceRecordRow = {
+  source_name: string;
+  external_id: string;
+  product_id: string;
+  source_hash: string;
+  imported_at: string;
+};
+
+export type MedicineProductRevisionRow = {
+  id: string;
+  product_id: string;
+  version: number;
+  snapshot: Json;
+  changed_by: string | null;
+  changed_at: string;
+  change_reason: string | null;
+};
+
+export type MedicineSubmissionRow = {
+  id: string;
+  branch_id: string;
+  submitted_by: string;
+  status: MedicineSubmissionStatus;
+  product_id: string | null;
+  generic_name: string | null;
+  brand_name: string | null;
+  product_name: string | null;
+  strength_text: string | null;
+  dosage_form: string | null;
+  route: string | null;
+  pack_size: string | null;
+  manufacturer: string | null;
+  marketing_authorisation_holder: string | null;
+  nafdac_reg_number: string | null;
+  category: string | null;
+  prescription_class: PrescriptionClass | null;
+  source_type: MedicineSourceType | null;
+  source_title: string | null;
+  source_url: string | null;
+  source_document_reference: string | null;
+  source_retrieved_at: string | null;
+  clinical_payload: Json;
+  notes: string | null;
+  submitted_at: string | null;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  review_reason: string | null;
+  accepted_product_id: string | null;
+  withdrawn_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MedicineCatalogueAuditRow = {
+  id: string;
+  product_id: string | null;
+  submission_id: string | null;
+  actor_id: string | null;
+  action: string;
+  from_status: string | null;
+  to_status: string | null;
+  description: string;
+  metadata: Json;
+  created_at: string;
+};
+
+export type MedicineImportBatchRow = {
+  id: string;
+  source_name: string;
+  source_url: string | null;
+  source_retrieved_at: string | null;
+  file_name: string | null;
+  imported_by: string | null;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  total_rows: number;
+  valid_rows: number;
+  duplicate_rows: number;
+  rejected_rows: number;
+  imported_rows: number;
+  source_license: string | null;
+  source_terms_url: string | null;
+  created_at: string;
+  completed_at: string | null;
+};
+
+export type MedicineImportRow = {
+  id: string;
+  batch_id: string;
+  external_id: string;
+  source_hash: string;
+  raw: Json;
+  normalized: Json | null;
+  identity_key: string | null;
+  status: MedicineImportStatus;
+  reason: string | null;
+  product_id: string | null;
+  created_at: string;
+};
+
+export type PharmacyMedicineAliasRow = {
+  id: string;
+  branch_id: string;
+  medicine_id: string;
+  alias: string;
+  alias_type: MedicineAliasType;
+  created_by: string | null;
+  created_at: string;
+};
+
+/** Shape returned by `pf_search_medicine_catalogue`. */
+export type MedicineCatalogueSearchRow = {
+  id: string;
+  product_name: string;
+  generic_name: string;
+  brand_name: string | null;
+  strength_text: string;
+  dosage_form: string;
+  route: string;
+  category: string;
+  prescription_class: string;
+  nafdac_reg_number: string | null;
+  nafdac_registration_status: string;
+  clinical_review_status: string;
+  last_clinical_review_date: string | null;
+  total_count: number;
+};
+
+/** Shape returned by `pf_medicine_duplicate_candidates`. */
+export type MedicineDuplicateCandidateRow = {
+  id: string;
+  product_name: string;
+  generic_name: string;
+  brand_name: string | null;
+  strength_text: string;
+  dosage_form: string;
+  route: string;
+  manufacturer: string | null;
+  nafdac_reg_number: string | null;
+  clinical_review_status: string;
+  match_score: number;
+};
+
+export type MedicineSubmissionInsert = {
+  branch_id: string;
+  submitted_by: string;
+  status?: MedicineSubmissionStatus;
+  product_id?: string | null;
+  generic_name?: string | null;
+  brand_name?: string | null;
+  product_name?: string | null;
+  strength_text?: string | null;
+  dosage_form?: string | null;
+  route?: string | null;
+  pack_size?: string | null;
+  manufacturer?: string | null;
+  marketing_authorisation_holder?: string | null;
+  nafdac_reg_number?: string | null;
+  category?: string | null;
+  prescription_class?: PrescriptionClass | null;
+  source_type?: MedicineSourceType | null;
+  source_title?: string | null;
+  source_url?: string | null;
+  source_document_reference?: string | null;
+  source_retrieved_at?: string | null;
+  clinical_payload?: Json;
+  notes?: string | null;
+  submitted_at?: string | null;
+};
+
+export type MedicineSubmissionUpdate = Partial<
+  Omit<MedicineSubmissionInsert, 'branch_id' | 'submitted_by'>
+> & {
+  review_reason?: string | null;
+  withdrawn_at?: string | null;
+};
 
 export type AuditEventRow = {
   id: string;
@@ -608,6 +1049,8 @@ export type BranchMembershipRow = {
   branch_id: string;
   role: StaffRole;
   is_default: boolean;
+  /** Per-branch clinical reviewer capability. Owners are reviewers implicitly. */
+  can_review_clinical: boolean;
   created_at: string;
 };
 
@@ -838,6 +1281,26 @@ export type Database = {
       customers: Table<CustomerRow, CustomerInsert, Partial<CustomerInsert>>;
       suppliers: Table<SupplierRow, SupplierInsert, Partial<SupplierInsert>>;
       medicines: Table<MedicineRow, MedicineInsert, MedicineUpdate>;
+      // Shared catalogue. Only medicine_submissions is client-writable; every
+      // other new table is read-only to a browser session and maintained by
+      // reviewer RPCs or the service-role importer.
+      medicine_products: Table<MedicineProductRow, never, never>;
+      medicine_ingredients: Table<MedicineIngredientRow, never, never>;
+      medicine_sources: Table<MedicineSourceRow, never, never>;
+      medicine_clinical_sections: Table<MedicineClinicalSectionRow, never, never>;
+      medicine_dosages: Table<MedicineDosageRow, never, never>;
+      medicine_product_aliases: Table<MedicineProductAliasRow, never, never>;
+      medicine_source_records: Table<MedicineSourceRecordRow, never, never>;
+      medicine_product_revisions: Table<MedicineProductRevisionRow, never, never>;
+      medicine_submissions: Table<
+        MedicineSubmissionRow,
+        MedicineSubmissionInsert,
+        MedicineSubmissionUpdate
+      >;
+      medicine_catalogue_audit: Table<MedicineCatalogueAuditRow, never, never>;
+      medicine_import_batches: Table<MedicineImportBatchRow, never, never>;
+      medicine_import_rows: Table<MedicineImportRow, never, never>;
+      pharmacy_medicine_aliases: Table<PharmacyMedicineAliasRow, never, never>;
       medicine_batches: Table<
         BatchRow,
         BatchInsert,
@@ -854,6 +1317,30 @@ export type Database = {
         [ToOne<'sale_items_sale_id_fkey', 'sale_id'>]
       >;
       credit_accounts: Table<CreditAccountRow, CreditAccountInsert, Partial<CreditAccountInsert>>;
+      // Append-only. No update model: payment records are audit rows, so the
+      // third generic is `never` rather than a Partial insert.
+      sale_payments: Table<SalePaymentRow, SalePaymentInsert, Partial<SalePaymentInsert>, [ToOne<'sale_payments_sale_id_fkey', 'sale_id'>]>;
+      // Returns are written only by pf_create_return / pf_review_return and read
+      // through branch-scoped RLS. `never` for insert/update is deliberate.
+      medicine_returns: Table<
+        MedicineReturnRow,
+        never,
+        never,
+        [ToOne<'medicine_returns_sale_id_fkey', 'sale_id'>]
+      >;
+      medicine_return_items: Table<
+        MedicineReturnItemRow,
+        never,
+        never,
+        [ToOne<'medicine_return_items_return_id_fkey', 'return_id'>]
+      >;
+      medicine_return_allocations: Table<
+        MedicineReturnAllocationRow,
+        never,
+        never,
+        [ToOne<'medicine_return_allocations_return_item_id_fkey', 'return_item_id'>]
+      >;
+      medicine_price_changes: Table<MedicinePriceChangeRow, never, never>;
       credit_ledger: Table<
         CreditLedgerRow,
         CreditLedgerInsert,
@@ -982,15 +1469,18 @@ export type Database = {
         Args: { p_token: string };
         Returns: { branch: string; granted_role: StaffRole }[];
       };
-      /**
-       * Authoritative checkout, from 20261012120000_authoritative_checkout.
-       *
-       * The only thing the client may influence per line is *which* product,
-       * *which* of its units, and *how many*. The multiplier, the unit price,
-       * the base-unit total and every money figure are resolved server-side, so
-       * a caller that forges them changes nothing. Returns no cost-bearing
-       * value, which is what keeps purchase costs behind the owner-gated views.
-       */
+       /**
+        * Authoritative checkout, from 20261012120000_authoritative_checkout,
+        * extended by M1 (p_sold_at) and 20261018120000 (p_payment_breakdown).
+        *
+        * The only thing the client may influence per line is *which* product,
+        * *which* of its units, and *how many*. The multiplier, the unit price,
+        * the base-unit total and every money figure are resolved server-side, so
+        * a caller that forges them changes nothing. A split sale's breakdown
+        * parts (jsonb array of {method, amount}) are re-validated server-side:
+        * their sum must equal p_amount_paid. Returns no cost-bearing value,
+        * which is what keeps purchase costs behind the owner-gated views.
+        */
       pf_complete_sale: {
         Args: {
           p_lines: unknown;
@@ -1002,6 +1492,8 @@ export type Database = {
           p_credit_account_id?: string | null;
           p_dispensed_against_prescription?: boolean;
           p_idempotency_key?: string | null;
+          p_sold_at?: string | null;
+          p_payment_breakdown?: unknown;
         };
         Returns: {
           sale_id: string;
@@ -1009,6 +1501,117 @@ export type Database = {
           total: number;
           line_count: number;
           already_completed: boolean;
+        }[];
+      };
+      /**
+       * Customer debt repayment, from 20261018120000_pos_payments_split.
+       *
+       * Locks the sale, refuses voided/refunded and walk-in sales, refuses
+       * overpayment, then atomically moves sales.amount_paid / outstanding /
+       * state, decrements customers.outstanding_debt and writes one
+       * sale_payments audit row (method + staff member). Staff only; tenant is
+       * resolved server-side.
+       */
+      pf_record_customer_payment: {
+        Args: {
+          p_sale_id: string;
+          p_amount: number;
+          p_method: PaymentKind;
+          p_note?: string | null;
+        };
+        Returns: {
+          sale_id: string;
+          receipt_number: string;
+          amount_paid: number;
+          outstanding: number;
+          state: string;
+          customer_outstanding_debt: number;
+        }[];
+      };
+      /**
+       * Returnable quantities for one completed sale, from
+       * 20261020120000_returns_and_price_updates.
+       *
+       * `quantity_remaining` excludes both completed and pending returns, so an
+       * attendant cannot reserve the same unit twice while an owner decides.
+       */
+      pf_sale_returnable: {
+        Args: { p_sale_id: string };
+        Returns: {
+          sale_item_id: string;
+          medicine_id: string;
+          medicine_name: string;
+          unit_key: string;
+          unit_name: string;
+          unit_multiplier: number;
+          quantity_sold: number;
+          quantity_returned: number;
+          quantity_pending: number;
+          quantity_remaining: number;
+          unit_price: number;
+          line_total: number;
+          return_value_per_unit: number;
+        }[];
+      };
+      /**
+       * Create a customer return. Owners complete it immediately; attendants
+       * create a pending-review row. The RPC never edits the original sale or its
+       * lines. Repeating p_idempotency_key returns the same row.
+       */
+      pf_create_return: {
+        Args: {
+          p_sale_id: string;
+          p_items: unknown;
+          p_reason: MedicineReturnReason;
+          p_note?: string | null;
+          p_refund_method?: MedicineReturnMethod | null;
+          p_idempotency_key?: string | null;
+        };
+        Returns: {
+          return_id: string;
+          return_number: string;
+          status: MedicineReturnStatus;
+          refund_value: number;
+          credit_applied: number;
+          refund_amount: number;
+          already_exists: boolean;
+        }[];
+      };
+      /** Owner-only approval or rejection of a pending return. */
+      pf_review_return: {
+        Args: {
+          p_return_id: string;
+          p_approve: boolean;
+          p_note?: string | null;
+          p_refund_method?: MedicineReturnMethod | null;
+        };
+        Returns: {
+          return_id: string;
+          return_number: string;
+          status: MedicineReturnStatus;
+          refund_value: number;
+          credit_applied: number;
+          refund_amount: number;
+        }[];
+      };
+      /**
+       * Owner-only authoritative price update. `p_expected_price` is the price
+       * the form was rendered with; a mismatch is refused, not overwritten.
+       */
+      pf_update_medicine_price: {
+        Args: {
+          p_medicine_id: string;
+          p_unit_key: string;
+          p_new_price: number;
+          p_expected_price: number;
+          p_reason?: string | null;
+        };
+        Returns: {
+          medicine_id: string;
+          unit_key: string;
+          old_price: number;
+          new_price: number;
+          changed_at: string;
         }[];
       };
       /**
@@ -1079,6 +1682,41 @@ export type Database = {
        * Exists only so the UI can say *why* an empty screen is empty.
        */
       pf_my_branch_status: { Args: Record<PropertyKey, never>; Returns: PharmacyStatus };
+      /**
+       * Shared catalogue search. Verified and outdated products only; RLS is the
+       * second gate. Paginated server-side so the browser never downloads the
+       * whole catalogue.
+       */
+      pf_search_medicine_catalogue: {
+        Args: {
+          p_query?: string | null;
+          p_dosage_form?: string | null;
+          p_strength?: string | null;
+          p_route?: string | null;
+          p_category?: string | null;
+          p_prescription_class?: string | null;
+          p_verification?: string | null;
+          p_limit?: number;
+          p_offset?: number;
+        };
+        Returns: MedicineCatalogueSearchRow[];
+      };
+      /** Candidate duplicates for an owner submission or the importer. */
+      pf_medicine_duplicate_candidates: {
+        Args: {
+          p_generic_name: string;
+          p_strength?: string | null;
+          p_dosage_form?: string | null;
+          p_route?: string | null;
+          p_brand_name?: string | null;
+          p_manufacturer?: string | null;
+          p_nafdac?: string | null;
+          p_exclude_id?: string | null;
+        };
+        Returns: MedicineDuplicateCandidateRow[];
+      };
+      /** True for a platform admin, owner, or a branch reviewer. */
+      pf_can_review_clinical: { Args: Record<PropertyKey, never>; Returns: boolean };
     };
     Enums: {
       staff_role: StaffRole;
@@ -1092,6 +1730,15 @@ export type Database = {
       order_state: OrderState;
       request_state: RequestState;
       urgency_level: UrgencyLevel;
+      medicine_verification_status: MedicineVerificationStatus;
+      medicine_registration_status: MedicineRegistrationStatus;
+      clinical_section_status: ClinicalSectionStatus;
+      clinical_section: ClinicalSection;
+      medicine_source_type: MedicineSourceType;
+      medicine_food_instruction: MedicineFoodInstruction;
+      medicine_submission_status: MedicineSubmissionStatus;
+      medicine_import_status: MedicineImportStatus;
+      medicine_alias_type: MedicineAliasType;
     };
     CompositeTypes: Record<string, never>;
   };

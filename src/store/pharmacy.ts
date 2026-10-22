@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { AppState, Branch } from '~/domain/state';
 import type { User } from '~/domain/types';
 import { createEmptyState, createSeedState } from '~/domain/seed';
@@ -21,7 +21,32 @@ const STORAGE_KEY = 'pharmaflow:state:v3';
  * agree. Persisted state — which only a demo build has — is applied after mount.
  */
 class PharmacyStore {
-  private state: AppState = isDemoMode() ? createSeedState() : createEmptyState();
+  /**
+   * Created on first read, never at module evaluation.
+   *
+   * The Workers runtime has no clock while modules are evaluated, so seeding
+   * there anchors every demo date to 1970 on the server while the browser seeds
+   * against the real date — a guaranteed hydration mismatch. Deferring to the
+   * first render puts both sides on the same request-time clock.
+   */
+  private _state: AppState | null = null;
+  private get state(): AppState {
+    return (this._state ??= isDemoMode() ? createSeedState() : createEmptyState());
+  }
+  private set state(next: AppState) {
+    this._state = next;
+  }
+
+  /**
+   * The snapshot the server rendered, kept immutable for hydration.
+   *
+   * `useSyncExternalStore` compares the first client render against this value,
+   * not against the live store. Persisted demo state must never land here: a
+   * store write during React's hydration pass would change text the server
+   * already sent (React #418) — which it did whenever `localStorage` held a
+   * sale.
+   */
+  private _serverState: AppState | null = null;
   private listeners = new Set<() => void>();
   private hydrated = false;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -33,8 +58,15 @@ class PharmacyStore {
 
   getState = (): AppState => this.state;
 
-  /** Server snapshot. Must be referentially stable across calls. */
-  getServerState = (): AppState => this.state;
+  /**
+   * Server snapshot. Must be referentially stable across calls.
+   *
+   * This is the seed, never the live store: React uses it for the hydration
+   * render, so it has to describe exactly what the server sent even if the
+   * persisted state has already been read.
+   */
+  getServerState = (): AppState =>
+    (this._serverState ??= isDemoMode() ? createSeedState() : createEmptyState());
 
   private emit() {
     for (const listener of this.listeners) listener();
@@ -122,11 +154,14 @@ const store = new PharmacyStore();
  * Keying the cache on the state object means the value is recomputed exactly
  * when the store changes and reused verbatim in between.
  */
-function useSelectedSnapshot<T>(selector: (state: AppState) => T): () => T {
+function useSelectedSnapshot<T>(
+  getState: () => AppState,
+  selector: (state: AppState) => T,
+): () => T {
   const cache = useRef<{ state: AppState; value: T } | undefined>(undefined);
 
   return useCallback((): T => {
-    const current = store.getState();
+    const current = getState();
     const hit = cache.current;
 
     if (hit !== undefined && hit.state === current) {
@@ -136,21 +171,51 @@ function useSelectedSnapshot<T>(selector: (state: AppState) => T): () => T {
     const value = selector(current);
     cache.current = { state: current, value };
     return value;
-  }, [selector]);
+  }, [getState, selector]);
+}
+
+/**
+ * False on the server and during the first client render, true once this
+ * component has mounted.
+ *
+ * Persisted demo state must not replace the server-rendered snapshot until the
+ * component that displays it has finished hydrating. Checking per component
+ * (rather than once at the root) also covers lazily loaded routes, which finish
+ * hydrating after the root effect has already run.
+ */
+function useIsMounted(): boolean {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  return mounted;
 }
 
 /**
  * Read a slice of state. The selector may be an inline arrow — derived values
  * are safe, because the result is cached per store state.
+ *
+ * The server snapshot is derived from the immutable seed (what the server
+ * actually rendered), not from the live store, so persisted client state cannot
+ * change the hydration render.
  */
 export function usePharmacy<T>(selector: (state: AppState) => T): T {
-  const getSnapshot = useSelectedSnapshot(selector);
-  return useSyncExternalStore(store.subscribe, getSnapshot, getSnapshot);
+  const mounted = useIsMounted();
+  const getSnapshot = useSelectedSnapshot(store.getState, selector);
+  const getServerSnapshot = useSelectedSnapshot(store.getServerState, selector);
+  return useSyncExternalStore(
+    store.subscribe,
+    mounted ? getSnapshot : getServerSnapshot,
+    getServerSnapshot,
+  );
 }
 
 /** The whole state, for the rare component that genuinely needs it. */
 export function usePharmacyState(): AppState {
-  return useSyncExternalStore(store.subscribe, store.getState, store.getServerState);
+  const mounted = useIsMounted();
+  return useSyncExternalStore(
+    store.subscribe,
+    mounted ? store.getState : store.getServerState,
+    store.getServerState,
+  );
 }
 
 export function useHydratePharmacy() {
@@ -238,6 +303,18 @@ export function usePharmacyActions() {
     [],
   );
 
+  const registerCustomer = useCallback(
+    (name: string, phone: string) =>
+      apply(ops.registerCustomer(store.getState(), name, phone)),
+    [],
+  );
+
+  const recordCustomerPayment = useCallback(
+    (saleId: string, amount: number, method: Parameters<typeof ops.recordCustomerPayment>[3], note?: string) =>
+      apply(ops.recordCustomerPayment(store.getState(), saleId, amount, method, note)),
+    [],
+  );
+
   const markNotificationRead = useCallback((id: string) => {
     store.setState(ops.markNotificationRead(store.getState(), id));
   }, []);
@@ -258,6 +335,8 @@ export function usePharmacyActions() {
     setBatchRecall,
     adjustStock,
     recordCreditPayment,
+    registerCustomer,
+    recordCustomerPayment,
     markNotificationRead,
     markAllNotificationsRead,
   };

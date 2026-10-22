@@ -27,6 +27,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await resolveActiveBranch();
       await syncLiveTenant();
     })();
+
+    // A cached branch is usable for the POS safety net while the server is
+    // unreachable, but it is not proof of current membership or role. Re-ask the
+    // database as soon as the browser reports a connection again. A failed
+    // revalidation keeps the cached branch; the UI labels it as saved, not
+    // verified, and the next successful resolution overwrites it.
+    const onOnline = () => {
+      void resolveActiveBranch().then(() => syncLiveTenant());
+    };
+    window.addEventListener('online', onOnline);
+    return () => window.removeEventListener('online', onOnline);
   }, []);
 
   useHydratePharmacy();

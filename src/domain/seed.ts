@@ -11,6 +11,83 @@ function hoursAgo(hours: number): string {
   return isoTimestamp(new Date(today.getTime() - hours * 3_600_000));
 }
 
+/**
+ * The instant this module was evaluated.
+ *
+ * The Workers runtime has no usable clock during module evaluation: `Date.now()`
+ * is 0 and `new Date()` is 1970-01-01 there, while in the browser both are the
+ * real page-load time. The seed constants below are therefore anchored to 1970
+ * on the server and to the present in the browser — the cause of the React #418
+ * mismatch. `createSeedState` re-anchors them onto one shared instant.
+ */
+const MODULE_ANCHOR_MS = Date.now();
+const DAY_MS = 86_400_000;
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
+
+/**
+ * The instant every seed date is expressed relative to.
+ *
+ * On the server this is captured on the first request, because module
+ * evaluation has no usable clock. In the browser it is the timestamp the server
+ * rendered into the document, so the first hydration render produces exactly
+ * the same dates. It falls back to the local clock only when the document was
+ * not server-rendered.
+ */
+let seedAnchor: Date | null = null;
+export function demoSeedAnchor(): Date {
+  if (seedAnchor) return seedAnchor;
+
+  if (typeof document !== 'undefined') {
+    const rendered = document.documentElement.getAttribute('data-demo-now');
+    if (rendered) {
+      const parsed = new Date(rendered);
+      if (!Number.isNaN(parsed.getTime())) {
+        seedAnchor = parsed;
+        return seedAnchor;
+      }
+    }
+  }
+
+  seedAnchor = new Date();
+  return seedAnchor;
+}
+
+/**
+ * Shifts every ISO date/timestamp in the seed by the distance between the
+ * module-evaluation anchor and `now`.
+ *
+ * Date-only values move in whole days so `isoDate`'s truncation cannot land
+ * them a day early; timestamps move by the exact millisecond delta. Only
+ * strings that are exactly an ISO date or timestamp are rewritten, so ids,
+ * receipt numbers, phone numbers and prose are untouched.
+ */
+function reanchor<T>(value: T, dayDelta: number, msDelta: number): T {
+  if (typeof value === 'string') {
+    if (ISO_DATE.test(value)) {
+      return isoDate(new Date(Date.parse(`${value}T00:00:00Z`) + dayDelta * DAY_MS)) as T;
+    }
+    if (ISO_TIMESTAMP.test(value)) {
+      return isoTimestamp(new Date(Date.parse(value) + msDelta)) as T;
+    }
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((entry) => reanchor(entry, dayDelta, msDelta)) as T;
+  }
+
+  if (value !== null && typeof value === 'object') {
+    const shifted: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value)) {
+      shifted[key] = reanchor(entry, dayDelta, msDelta);
+    }
+    return shifted as T;
+  }
+
+  return value;
+}
+
 /* ------------------------------------------------------------------ people */
 
 const owner = {
@@ -1043,7 +1120,7 @@ export const SEED_CUSTOMER_ORDERS: AppState['customerOrders'] = [
     customerPhone: '08021112233',
     deliveryType: 'delivery' as const,
     deliveryAddress: '12 Bourdillon Road, Ikoyi, Lagos',
-    branchName: 'Ojota Branch',
+    branchName: 'Endline Pharmacy',
     items: [
       {
         medicineId: 'med-amoxicillin',
@@ -1070,7 +1147,7 @@ export const SEED_CUSTOMER_ORDERS: AppState['customerOrders'] = [
     customerName: 'Blessing Eze',
     customerPhone: '07033445566',
     deliveryType: 'pickup' as const,
-    branchName: 'Ojota Branch',
+    branchName: 'Endline Pharmacy',
     items: [
       {
         medicineId: 'med-loratadine',
@@ -1155,11 +1232,11 @@ export const SEED_NOTIFICATIONS: AppState['notifications'] = [
 ];
 
 export const SEED_BRANCH: AppState['branch'] = {
-  id: 'br-ojota',
-  name: 'Ojota Branch',
-  address: '88 Awolowo Way, Ojota, Lagos',
-  city: 'Lagos',
-  state: 'Lagos',
+  id: 'br-endline',
+  name: 'Endline Pharmacy',
+  address: '12 Murtala Muhammad Way, Kano',
+  city: 'Kano',
+  state: 'Kano',
   phone: '+2348012345678',
   openingHours: '8:00 – 22:00 daily',
   isOpenNow: true,
@@ -1210,8 +1287,12 @@ export const SEED_AUDIT_EVENTS: AppState['auditEvents'] = [
 
 /* ---------------------------------------------------------------- the state */
 
-export function createSeedState(): AppState {
-  return {
+export function createSeedState(now: Date = demoSeedAnchor()): AppState {
+  const msDelta = now.getTime() - MODULE_ANCHOR_MS;
+  const dayDelta =
+    Math.floor(now.getTime() / DAY_MS) - Math.floor(MODULE_ANCHOR_MS / DAY_MS);
+
+  const state: AppState = {
     currentUser: owner,
     users: [...SEED_USERS],
     medicines: SEED_MEDICINES.map((m) => ({ ...m })),
@@ -1236,6 +1317,8 @@ export function createSeedState(): AppState {
     branch: { ...SEED_BRANCH },
     stockMovements: [],
   };
+
+  return reanchor(state, dayDelta, msDelta);
 }
 
 /**

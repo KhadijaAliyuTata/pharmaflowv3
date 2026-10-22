@@ -1,6 +1,15 @@
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, createFileRoute, useNavigate } from '@tanstack/react-router';
-import { Banknote, CalendarDays, ChevronDown, ChevronRight, Lock, Receipt, TrendingUp } from 'lucide-react';
+import {
+  Banknote,
+  CalendarDays,
+  ChevronDown,
+  ChevronRight,
+  Lock,
+  Receipt,
+  RotateCcw,
+  TrendingUp,
+} from 'lucide-react';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
 import { Card, CardContent, CardHeader } from '~/components/ui/card';
@@ -26,7 +35,7 @@ import {
   SectionTitle,
   StatTile,
 } from '~/components/app/primitives';
-import { formatPercent } from '~/domain/money';
+import { formatNaira, formatPercent } from '~/domain/money';
 import {
   PERIOD_LABEL,
   REPORT_PERIODS,
@@ -36,8 +45,26 @@ import {
 } from '~/domain/dashboard';
 import { summariseSales } from '~/domain/selectors';
 import type { SaleLineRow } from '~/domain/dashboard';
+import {
+  RETURN_REASON_LABEL,
+  RETURN_STATUS_LABEL,
+  canStartReturn,
+  returnedValue,
+  saleReturns,
+  saleReturnState,
+  returnStateLabel,
+} from '~/domain/returns';
+import type { Sale, SaleReturn } from '~/domain/types';
+import { SaleReturnDialog } from '~/components/app/sale-return-dialog';
+import { SaleReturnReviewDialog } from '~/components/app/sale-return-review-dialog';
 import { useIsOwner } from '~/hooks/use-is-owner';
 import { useSales } from '~/hooks/use-sales';
+import { toSale } from '~/hooks/sales-mapping';
+import {
+  getSale,
+  listPendingReturns,
+  type PendingReturnQueueRow,
+} from '~/lib/supabase/sales';
 
 /**
  * Sales ledger — the detail behind the owner dashboard's "Today's Sales" card.
@@ -95,16 +122,83 @@ function SalesScreen() {
   const { period } = Route.useSearch();
   // The ledger from Supabase in live mode, the seeded sales in demo mode. Empty
   // and flagged while it loads or if it fails, never the prototype's receipts.
-  const { sales, loading, error } = useSales();
+  // The ledger stays a recent window, but the owner review queue is its own
+  // branch-wide read. A busy trading day must not hide a pending return behind
+  // the ledger limit.
+  const { sales, loading, error, refresh, source } = useSales(200);
+  const live = source === 'supabase';
   const isOwner = useIsOwner();
 
   /** Which multi-item receipt is expanded. `null` = all collapsed. */
   const [expanded, setExpanded] = useState<string | null>(null);
+  /** The sale whose return dialog is open. */
+  const [returnSale, setReturnSale] = useState<Sale | null>(null);
+  /** A pending return selected by an owner for approval/rejection. */
+  const [reviewTarget, setReviewTarget] = useState<{ sale: Sale; entry: SaleReturn } | null>(null);
+  /** Confirmation from the server, never an optimistic guess. */
+  const [notice, setNotice] = useState<string | null>(null);
+  const [pendingQueue, setPendingQueue] = useState<PendingReturnQueueRow[]>([]);
+  const [pendingError, setPendingError] = useState<string | null>(null);
+
+  const loadPending = useCallback(async () => {
+    if (!live || !isOwner) {
+      setPendingQueue([]);
+      setPendingError(null);
+      return;
+    }
+    const result = await listPendingReturns();
+    if (result.ok) {
+      setPendingQueue(result.data);
+      setPendingError(null);
+      return;
+    }
+    setPendingQueue([]);
+    setPendingError(result.error);
+  }, [live, isOwner]);
+
+  useEffect(() => {
+    void loadPending();
+  }, [loadPending]);
 
   const inPeriod = useMemo(() => salesInPeriod(sales, period), [sales, period]);
   const summary = useMemo(() => summariseSales(inPeriod), [inPeriod]);
 
   const rows = useMemo(() => saleLines({ sales }, period), [sales, period]);
+  const salesById = useMemo(() => new Map(sales.map((sale) => [sale.id, sale])), [sales]);
+  const settledReturns = useMemo(
+    () =>
+      inPeriod
+        .flatMap((sale) =>
+          saleReturns(sale)
+            .filter((entry) => entry.status !== 'pending_review')
+            .map((entry) => ({ sale, entry })),
+        )
+        .sort((a, b) => b.entry.createdAt.localeCompare(a.entry.createdAt)),
+    [inPeriod],
+  );
+
+  async function openReview(row: PendingReturnQueueRow) {
+    setNotice(null);
+    const result = await getSale(row.sale_id);
+    if (!result.ok) {
+      setNotice(`The pending return could not be opened: ${result.error}`);
+      return;
+    }
+    const sale = toSale(result.data, '');
+    const entry = sale.returns?.find((candidate) => candidate.id === row.id);
+    if (!entry) {
+      setNotice('The pending return was not found on its sale.');
+      return;
+    }
+    setReviewTarget({ sale, entry });
+  }
+
+  function recordNotice(message: string) {
+    setNotice(message);
+    // The ledger, return badges and pending queue are separate reads.
+    refresh();
+    void loadPending();
+  }
 
   /**
    * Group lines by receipt.
@@ -170,16 +264,127 @@ function SalesScreen() {
         })}
       </div>
 
+      {notice && (
+        <p
+          role="status"
+          className="rounded-lg border border-success-border bg-success-subtle px-3 py-2 text-sm text-success"
+        >
+          {notice}
+        </p>
+      )}
+
+      {isOwner && pendingError && (
+        <p
+          role="alert"
+          className="rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm"
+        >
+          Pending returns could not be loaded: {pendingError}
+        </p>
+      )}
+
+      {isOwner && pendingQueue.length > 0 && (
+        <Card>
+          <CardHeader className="border-b pb-3">
+            <SectionTitle>Returns awaiting your review</SectionTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 pt-3">
+            {pendingQueue.map((row) => (
+              <div
+                key={row.id}
+                className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3"
+              >
+                <div className="min-w-0">
+                  <p className="font-medium">
+                    {row.return_number} - {row.sales?.receipt_number ?? 'Sale'}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {RETURN_REASON_LABEL[row.reason]} - {row.medicine_return_items.length} line
+                    {row.medicine_return_items.length === 1 ? '' : 's'} - value{' '}
+                    <Money value={Number(row.refund_value)} />
+                  </p>
+                  {row.note && <p className="mt-1 text-sm">{row.note}</p>}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge variant="warning">{RETURN_STATUS_LABEL.pending_review}</Badge>
+                  <Button size="sm" variant="outline" onClick={() => void openReview(row)}>
+                    Review
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {settledReturns.length > 0 && (
+        <Card>
+          <CardHeader className="border-b pb-3">
+            <SectionTitle>Returns in this period</SectionTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 pt-3">
+            {settledReturns.map(({ sale, entry }) => {
+              const restocked = entry.items.reduce(
+                (total, item) => total + item.restockedUnits,
+                0,
+              );
+              const quarantined = entry.items.reduce(
+                (total, item) => total + item.quarantinedUnits,
+                0,
+              );
+              return (
+                <div
+                  key={entry.id}
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3"
+                >
+                  <div className="min-w-0">
+                    <p className="font-medium">
+                      {entry.returnNumber} · {sale.receiptNumber}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {RETURN_REASON_LABEL[entry.reason]} ·{' '}
+                      {entry.items.length} line{entry.items.length === 1 ? '' : 's'} · value{' '}
+                      <Money value={entry.refundValue} />
+                      {entry.creditApplied > 0 && ` · credit ${formatNaira(entry.creditApplied)}`}
+                      {entry.refundAmount > 0 && ` · refund ${formatNaira(entry.refundAmount)}`}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {restocked} restocked
+                      {quarantined > 0 ? ` · ${quarantined} quarantined` : ''}
+                    </p>
+                  </div>
+                  <Badge variant={entry.status === 'completed' ? 'secondary' : 'outline'}>
+                    {RETURN_STATUS_LABEL[entry.status]}
+                  </Badge>
+                </div>
+              );
+            })}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Takings and counts are always safe: money taken in is not a secret, and
           an attendant already sees it on the POS. */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatTile
-          label="Total sales"
-          value={<Money value={summary.net} compact />}
-          hint={`${summary.count} transaction${summary.count === 1 ? '' : 's'}`}
+          label="Net sales"
+          value={<Money value={summary.netAfterReturns} compact />}
+          hint={
+            summary.returned > 0
+              ? `${summary.count} transaction${summary.count === 1 ? '' : 's'} · ${formatNaira(summary.returned)} returned`
+              : `${summary.count} transaction${summary.count === 1 ? '' : 's'}`
+          }
           icon={<Banknote className="size-4" />}
           tone="positive"
         />
+        {summary.returned > 0 && (
+          <StatTile
+            label="Returns"
+            value={<Money value={summary.returned} compact />}
+            hint="Accepted in this period"
+            icon={<RotateCcw className="size-4" />}
+            tone="warning"
+          />
+        )}
         <StatTile
           label="Transactions"
           value={summary.count}
@@ -253,6 +458,7 @@ function SalesScreen() {
                     <TableHead>Time</TableHead>
                     <TableHead>Payment</TableHead>
                     <TableHead className="text-right">Sale total</TableHead>
+                    <TableHead className="text-right">Return</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -260,6 +466,9 @@ function SalesScreen() {
                     const first = lines[0];
                     const open = expanded === saleId;
                     const multi = lines.length > 1;
+                    const sale = salesById.get(saleId);
+                    const returnState = sale ? saleReturnState(sale) : 'none';
+                    const returnedAmount = sale ? returnedValue(sale) : 0;
 
                     return (
                       // Keyed Fragment, not a bare <>: a keyed fragment is what
@@ -290,6 +499,20 @@ function SalesScreen() {
                                   {first.receiptNumber}
                                   {multi && ` · ${lines.length} items`}
                                 </p>
+                                {returnState !== 'none' && (
+                                  <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                                    <Badge
+                                      variant={returnState === 'pending' ? 'warning' : 'secondary'}
+                                    >
+                                      {returnStateLabel(returnState)}
+                                    </Badge>
+                                    {returnedAmount > 0 && (
+                                      <span className="text-xs text-muted-foreground">
+                                        {formatNaira(returnedAmount)} returned
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
                               </div>
                             </div>
                           </TableCell>
@@ -313,6 +536,21 @@ function SalesScreen() {
                             className="tabular text-right font-medium"
                           >
                             <Money value={first.saleTotal} />
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {live && sale && canStartReturn(sale) && returnState !== 'returned' && (
+                              <Button
+                                size="xs"
+                                variant="ghost"
+                                onClick={() => {
+                                  setNotice(null);
+                                  setReturnSale(sale);
+                                }}
+                              >
+                                <RotateCcw className="size-3.5" />
+                                Return
+                              </Button>
+                            )}
                           </TableCell>
                         </TableRow>
 
@@ -346,6 +584,7 @@ function SalesScreen() {
                               >
                                 <Money value={line.lineTotal} />
                               </TableCell>
+                              <TableCell />
                             </TableRow>
                           ))}
                       </Fragment>
@@ -357,6 +596,22 @@ function SalesScreen() {
           )}
         </CardContent>
       </Card>
+
+      <SaleReturnDialog
+        sale={returnSale}
+        isOwner={isOwner}
+        onClose={() => setReturnSale(null)}
+        onRecorded={recordNotice}
+      />
+
+      {reviewTarget && (
+        <SaleReturnReviewDialog
+          sale={reviewTarget.sale}
+          entry={reviewTarget.entry}
+          onClose={() => setReviewTarget(null)}
+          onRecorded={recordNotice}
+        />
+      )}
     </div>
   );
 }

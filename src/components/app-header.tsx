@@ -28,7 +28,8 @@ import { SidebarTrigger } from '~/components/ui/sidebar';
 import { Kbd } from '~/components/ui/kbd';
 import { ThemeToggle } from '~/components/theme-toggle';
 import { findNavItem, ROLE_LABEL, type Role } from '~/lib/nav';
-import { signOut, useSession } from '~/lib/session';
+import { useSession } from '~/lib/session';
+import { signOutSafely } from '~/lib/sign-out';
 import {
   activeBranch,
   hasMultipleBranches,
@@ -76,10 +77,13 @@ export function AppHeader({
   // The sidebar already has a sign-out in its footer, but on a phone the sidebar
   // is a closed sheet, so that button is unreachable without opening it. The
   // header is the one chrome element present on every screen at every width, so
-  // it carries the account menu too. Both call the same `signOut`.
+  // it carries the account menu too. Both call the same safe sign-out wrapper,
+  // which retains unsynchronised sales and warns instead of deleting them.
   const onSignOut = () => {
-    signOut();
-    void navigate({ to: '/login' });
+    void signOutSafely().then((result) => {
+      if (result.warning) toast.warning(result.warning);
+      void navigate({ to: '/login' });
+    });
   };
 
   useEffect(() => {
@@ -94,7 +98,7 @@ export function AppHeader({
       <Breadcrumb>
         <BreadcrumbList>
           <BreadcrumbItem className="hidden md:block">
-            <BreadcrumbLink render={<Link to="/" />}>PharmaFlow</BreadcrumbLink>
+            <BreadcrumbLink render={<Link to="/dashboard" />}>PharmaFlow</BreadcrumbLink>
           </BreadcrumbItem>
           <BreadcrumbSeparator className="hidden md:block" />
           <BreadcrumbItem>

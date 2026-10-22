@@ -1,5 +1,5 @@
 import { Link, useNavigate } from '@tanstack/react-router';
-import { LogOut, Plus, ShieldCheck, UserRound } from 'lucide-react';
+import { ArrowLeft, LogOut, Plus, ShieldCheck, UserRound } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
@@ -29,8 +29,14 @@ import {
 import { Avatar, AvatarFallback } from '~/components/ui/avatar';
 import { BrandMark } from '~/components/brand-logo';
 import { BRAND, ROLE_LABEL, sectionsForRole } from '~/lib/nav';
-import { useBranchName } from '~/lib/supabase/branch-context';
-import { DEMO_ACCOUNTS, isDemoMode, signOut, switchRole, useSession } from '~/lib/session';
+import {
+  effectiveRole,
+  roleForBranch,
+  useActiveBranch,
+  useBranchName,
+} from '~/lib/supabase/branch-context';
+import { DEMO_ACCOUNTS, isDemoMode, switchRole, useSession } from '~/lib/session';
+import { signOutSafely } from '~/lib/sign-out';
 import type { Role } from '~/domain/types';
 
 export interface AppSidebarProps extends React.ComponentProps<typeof Sidebar> {
@@ -57,11 +63,19 @@ export function AppSidebar({
   ...props
 }: AppSidebarProps) {
   const { user } = useSession();
+  const branch = useActiveBranch();
   const navigate = useNavigate();
 
-  // `owner` while loading, matching the server. The store's `currentUser` is
-  // what the screens themselves gate on, so the two agree after mount.
-  const role: Role = user?.role ?? 'owner';
+  // `owner` while loading, matching the server. A cached branch is stale
+  // authorisation and is always assistant, even if the profile cache says
+  // otherwise. The store's `currentUser` is what the screens gate on, so this
+  // uses the same rule the shell applies.
+  const role: Role = effectiveRole(
+    branch.source,
+    roleForBranch(branch.currentBranchId),
+    user?.role ?? null,
+    'owner',
+  );
   const name = userName ?? user?.name ?? 'Signed out';
   // Compatibility boundary: prefer the branch Supabase resolved, fall back to the
   // prototype's own (localStorage) value. Display only - never a security input.
@@ -69,8 +83,10 @@ export function AppSidebar({
   const sections = sectionsForRole(role);
 
   const onSignOut = () => {
-    signOut();
-    void navigate({ to: '/login' });
+    void signOutSafely().then((result) => {
+      if (result.warning) toast.warning(result.warning);
+      void navigate({ to: '/login' });
+    });
   };
 
   return (
@@ -81,7 +97,7 @@ export function AppSidebar({
             <SidebarMenuButton
               size="lg"
               className="data-[slot=sidebar-menu-button]:p-1.5!"
-              render={<Link to="/" />}
+              render={<Link to="/dashboard" />}
             >
               {/* The real mark rather than the `PF` initials tile. It replaces a
                   coloured square, so it carries its own colours and needs no
@@ -236,6 +252,21 @@ export function AppSidebar({
                 <LogOut className="size-4" />
               </Button>
             </div>
+          </SidebarMenuItem>
+        </SidebarMenu>
+
+        {/* A way out of the product and back to the public site. Without it the
+            demo dashboards were a dead end once entered. */}
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              tooltip="PharmaFlow website"
+              className="text-muted-foreground"
+              render={<Link to="/" />}
+            >
+              <ArrowLeft />
+              <span>PharmaFlow website</span>
+            </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
 

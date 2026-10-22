@@ -407,3 +407,173 @@
     @apply font-sans;
   }
 }
+
+/* ------------------------------------------------------------ landing motion
+   Decorative only: the marks are aria-hidden, sit behind the content, and
+   every animation is switched off under prefers-reduced-motion. CSS only -
+   no animation library and no scroll listeners. */
+
+@keyframes pf-float {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  50% {
+    transform: translate3d(0, -16px, 0) rotate(5deg);
+  }
+}
+
+@keyframes pf-drift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  33% {
+    transform: translate3d(10px, -12px, 0) rotate(-4deg);
+  }
+  66% {
+    transform: translate3d(-8px, -5px, 0) rotate(3deg);
+  }
+}
+
+@keyframes pf-rise {
+  0% {
+    transform: translate3d(0, 18px, 0);
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    transform: translate3d(0, -44px, 0);
+    opacity: 0;
+  }
+}
+
+@keyframes pf-twinkle {
+  0%,
+  100% {
+    opacity: 0.2;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 0.85;
+    transform: scale(1.15);
+  }
+}
+
+@keyframes pf-glow {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.65;
+    transform: scale(1.08);
+  }
+}
+
+.pf-float {
+  animation: pf-float 9s var(--ease-out-quint) infinite;
+}
+
+.pf-drift {
+  animation: pf-drift 15s ease-in-out infinite;
+}
+
+.pf-rise {
+  animation: pf-rise 16s ease-in-out infinite;
+}
+
+.pf-twinkle {
+  animation: pf-twinkle 4.5s ease-in-out infinite;
+}
+
+.pf-glow {
+  animation: pf-glow 14s ease-in-out infinite;
+}
+
+/* Scroll-linked entrance. Applied only where view timelines are supported and
+   motion is allowed; everywhere else the content is simply visible. */
+@supports (animation-timeline: view()) {
+  @media (prefers-reduced-motion: no-preference) {
+    .pf-reveal {
+      animation: pf-reveal-in linear both;
+      animation-timeline: view();
+      animation-range: entry 8% entry 42%;
+    }
+  }
+}
+
+@keyframes pf-reveal-in {
+  from {
+    opacity: 0.55;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Tab-panel entrance. The animation property only applies to the active panel,
+   so switching tabs restarts it without remounting every category. */
+@keyframes pf-tab-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.pf-tab-panel[data-active='true'] {
+  animation: pf-tab-in 260ms var(--ease-out-quint) both;
+}
+
+/* FAQ panel entrance. The panel is hidden when collapsed, so the animation
+   runs when it is revealed without leaving collapsed answers in the
+   accessibility tree. */
+@keyframes pf-faq-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.pf-faq-panel[data-open='true'] {
+  animation: pf-faq-in 180ms var(--ease-out-quint) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pf-float,
+  .pf-drift,
+  .pf-rise,
+  .pf-twinkle,
+  .pf-glow,
+  .pf-reveal,
+  .pf-tab-panel,
+  .pf-faq-panel {
+    animation: none !important;
+  }
+
+  .pf-reveal {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+
+  .pf-tab-panel[data-active='true'] {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}

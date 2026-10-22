@@ -313,3 +313,78 @@ export async function listBatchCosts() {
 
   return fromList(await client().from('pf_batch_costs').select('*'));
 }
+
+/* ------------------------------------------------------- authoritative price */
+
+export interface UpdateMedicinePriceInput {
+  medicineId: string;
+  unitKey: string;
+  newPrice: number;
+  /**
+   * The price the form was rendered with. The server refuses the write if the
+   * current price no longer matches, instead of silently overwriting a newer
+   * edit made on another screen.
+   */
+  expectedPrice: number;
+  reason?: string;
+}
+
+export interface UpdateMedicinePriceResult {
+  medicineId: string;
+  unitKey: string;
+  oldPrice: number;
+  newPrice: number;
+  changedAt: string;
+}
+
+/**
+ * Owner-only selling-price update.
+ *
+ * This is the single authoritative live write path for `medicines.units`.
+ * It updates one unit's `sellingPrice`, mirrors the base unit into
+ * `price_per_base_unit`, and leaves purchase cost, batches, expiry and stock
+ * untouched. The database also writes an append-only `medicine_price_changes`
+ * row and an audit event.
+ *
+ * Requires 20261020120000_returns_and_price_updates to be applied. Calling it
+ * against an older database fails with "function ... does not exist", which the
+ * screen surfaces rather than pretending the price changed.
+ */
+export async function updateMedicinePrice(
+  input: UpdateMedicinePriceInput,
+): Promise<Result<UpdateMedicinePriceResult>> {
+  if (!isSupabaseConfigured()) return { ok: false, error: OFFLINE };
+  if (!(await hasSession())) return { ok: false, error: NO_SESSION };
+
+  const { data, error } = await client().rpc('pf_update_medicine_price', {
+    p_medicine_id: input.medicineId,
+    p_unit_key: input.unitKey,
+    p_new_price: input.newPrice,
+    p_expected_price: input.expectedPrice,
+    p_reason: input.reason?.trim() ? input.reason.trim() : null,
+  });
+
+  if (error) return { ok: false, error: error.message, code: error.code };
+
+  const row = (Array.isArray(data) ? data[0] : data) as
+    | {
+        medicine_id?: string;
+        unit_key?: string;
+        old_price?: number;
+        new_price?: number;
+        changed_at?: string;
+      }
+    | null;
+
+  if (!row?.medicine_id || !row.unit_key) {
+    return { ok: false, error: 'The price was not changed.' };
+  }
+
+  return ok({
+    medicineId: row.medicine_id,
+    unitKey: row.unit_key,
+    oldPrice: Number(row.old_price ?? 0),
+    newPrice: Number(row.new_price ?? 0),
+    changedAt: row.changed_at ?? new Date().toISOString(),
+  });
+}

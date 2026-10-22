@@ -1,9 +1,11 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { createFileRoute } from '@tanstack/react-router';
 import { ArrowUpDown, Lock, Receipt, Search, Users, Wallet } from 'lucide-react';
+import { toast } from 'sonner';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
 import { Card, CardContent, CardHeader } from '~/components/ui/card';
+import { Field, FieldLabel } from '~/components/ui/field';
 import { Input } from '~/components/ui/input';
 import {
   Select,
@@ -34,13 +36,20 @@ import {
   SectionTitle,
   StatTile,
 } from '~/components/app/primitives';
-import { formatRelative, formatWhen, sum } from '~/domain/money';
-import type { Customer, Medicine } from '~/domain/types';
+import { formatRelative, formatWhen, money, sum } from '~/domain/money';
+import type { Customer, Medicine, PaymentMethod } from '~/domain/types';
 import { useSeedQuery } from '~/lib/use-seed-query';
 import { useMedicines } from '~/hooks/use-medicines';
 import { useCustomers } from '~/hooks/use-customers';
 import { useSales } from '~/hooks/use-sales';
 import { useIsOwner } from '~/hooks/use-is-owner';
+import { usePharmacyActions } from '~/store/pharmacy';
+import { isDemoMode } from '~/lib/session';
+import {
+  listSalePayments,
+  recordCustomerPayment as recordCustomerPaymentRemote,
+  type SalePaymentRow,
+} from '~/lib/supabase/sales';
 
 export const Route = createFileRoute('/_app/customers')({
   // Seeded by the header's global search, so a customer result opens the
@@ -96,9 +105,9 @@ function compare(a: Customer, b: Customer, key: SortKey): number {
 function CustomersScreen() {
   // Customers from Supabase in live mode. useCustomers has no local fallback
   // there, so a loading or failed read is empty and flagged, not seed data.
-  const { customers, loading, error } = useCustomers();
+  const { customers, loading, error, refresh: refreshCustomers } = useCustomers();
   // Purchase history draws on the same live ledger the /sales screen reads.
-  const { sales } = useSales();
+  const { sales, refresh: refreshSales } = useSales();
   // Catalogue from Supabase in live mode; useMedicines has no local
   // fallback there, so a failed read surfaces as an error, not as seed data.
   const { medicines } = useMedicines();
@@ -121,6 +130,118 @@ function CustomersScreen() {
     [sales, selected],
   );
 
+  // Debt management: this pharmacy's unpaid balances for the selected customer,
+  // and this pharmacy's recorded payments (the split parts and repayments).
+  // Attendants serve the debt desk too — recording a repayment is an
+  // owner-or-attendant action, its audit row carrying whoever did it.
+  const { recordCustomerPayment: recordCustomerPaymentAction } = usePharmacyActions();
+  const outstandingSales = useMemo(
+    () =>
+      history.filter(
+        (sale) => sale.outstandingBalance > 0 && sale.status !== 'voided' && sale.status !== 'refunded',
+      ),
+    [history],
+  );
+  const [repayTargetId, setRepayTargetId] = useState<string | null>(null);
+  const [repayAmount, setRepayAmount] = useState('');
+  const [repayMethod, setRepayMethod] = useState<Exclude<PaymentMethod, 'split'>>('cash');
+  const [repayBusy, setRepayBusy] = useState(false);
+  const [repayError, setRepayError] = useState<string | null>(null);
+  const [paymentHistory, setPaymentHistory] = useState<SalePaymentRow[] | null>(null);
+
+  useEffect(() => {
+    setRepayTargetId(null);
+    setRepayAmount('');
+    setRepayError(null);
+    setPaymentHistory(null);
+    if (!selected || isDemoMode()) return;
+    let stale = false;
+    void listSalePayments().then((result) => {
+      if (!stale) setPaymentHistory(result.ok ? result.data : null);
+    });
+    return () => {
+      stale = true;
+    };
+  }, [selected]);
+
+  const repayHistory = useMemo(() => {
+    if (!selected) return [];
+    if (paymentHistory) {
+      return paymentHistory.filter((row) =>
+        outstandingSales.some((sale) => sale.id === row.sale_id) ||
+        history.some((sale) => sale.id === row.sale_id),
+      );
+    }    // Demo mode: repayments live on the recorded sale itself.
+    return history.flatMap((sale) =>
+      (sale.paymentBreakdown ?? [])
+        .filter((part) => part.recordedAt)
+        .map((part) => ({
+          id: `${sale.id}-${part.recordedAt}`,
+          sale_id: sale.id,
+          method: part.method,
+          amount: part.amount,
+          recorded_by: part.recordedBy ?? null,
+          recorded_at: part.recordedAt ?? '',
+          note: null,
+        })),
+    );
+  }, [selected, history, outstandingSales, paymentHistory]);
+
+  const recordRepayment = async () => {
+    if (!selected || !repayTargetId) return;
+    const sale = outstandingSales.find((s) => s.id === repayTargetId);
+    if (!sale) return;
+    const amount = money(Number(repayAmount) || 0);
+    setRepayError(null);
+    if (amount <= 0) {
+      setRepayError('Enter an amount greater than zero');
+      return;
+    }
+    if (amount > sale.outstandingBalance) {
+      setRepayError(
+        `A repayment cannot exceed the outstanding balance of ₦${sale.outstandingBalance.toLocaleString('en-NG')}`,
+      );
+      return;
+    }
+
+    setRepayBusy(true);
+    if (isDemoMode()) {
+      const result = recordCustomerPaymentAction(repayTargetId, amount, repayMethod);
+      setRepayBusy(false);
+      if (!result.ok) {
+        setRepayError(result.error);
+        return;
+      }
+      toast.success(
+        `Repayment recorded — ${sale.receiptNumber} balance ₦${Math.max(0, sale.outstandingBalance - amount).toLocaleString('en-NG')} remains`,
+      );
+      setRepayAmount('');
+      setRepayTargetId(null);
+      return;
+    }
+
+    const result = await recordCustomerPaymentRemote({
+      saleId: repayTargetId,
+      amount,
+      method: repayMethod,
+    });
+    setRepayBusy(false);
+    if (!result.ok) {
+      setRepayError(result.error);
+      return;
+    }
+    toast.success(
+      `Repayment recorded — ${result.data.receiptNumber} balance ₦${result.data.outstanding.toLocaleString('en-NG')} remains`,
+    );
+    setRepayAmount('');
+    setRepayTargetId(null);
+    refreshCustomers();
+    refreshSales();
+    void listSalePayments().then((read) => {
+      if (read.ok) setPaymentHistory(read.data);
+    });
+  };
+
   const chronic = useMemo(
     () =>
       (selected?.chronicMedications ?? [])
@@ -142,7 +263,8 @@ function CustomersScreen() {
         meta={
           <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <Lock className="size-3" />
-            Read only. Registering and editing customers is not wired up.
+            This screen is read only — registration happens at the till, and
+            repayments are recorded in the panel below.
           </p>
         }
       />
@@ -327,6 +449,149 @@ function CustomersScreen() {
                   <p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
                     {selected.notes}
                   </p>
+                )}
+
+                {outstandingSales.length > 0 && (
+                  <div className="space-y-2 rounded-lg border border-warning/40 bg-warning-subtle/40 p-3">
+                    <SectionTitle>Outstanding balance</SectionTitle>
+                    <p className="text-xs text-muted-foreground">
+                      <Money value={selected.outstandingDebt} /> owed across{' '}
+                      {outstandingSales.length}{' '}
+                      {outstandingSales.length === 1 ? 'sale' : 'sales'}.
+                    </p>
+
+                    <ul className="space-y-1.5">
+                      {outstandingSales.map((sale) => {
+                        const isTarget = repayTargetId === sale.id;
+                        return (
+                          <li key={sale.id} className="rounded-lg border bg-background p-2.5">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="tabular text-sm font-medium">
+                                {sale.receiptNumber}
+                              </span>
+                              <span className="text-sm text-destructive">
+                                <Money value={sale.outstandingBalance} />
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                              <span>
+                                {formatWhen(sale.date)} · paid <Money value={sale.amountPaid} /> of{' '}
+                                <Money value={sale.total} />
+                              </span>
+                              {!isTarget && (
+                                <Button
+                                  variant="outline"
+                                  className="h-8 px-2 text-xs"
+                                  onClick={() => {
+                                    setRepayTargetId(sale.id);
+                                    setRepayAmount(String(sale.outstandingBalance));
+                                    setRepayError(null);
+                                  }}
+                                >
+                                  Record repayment
+                                </Button>
+                              )}
+                            </div>
+
+                            {isTarget && (
+                              <div className="mt-2 space-y-2 border-t pt-2">
+                                <div className="grid grid-cols-2 gap-2">
+                                  <Field>
+                                    <FieldLabel htmlFor="repay-amount">Amount</FieldLabel>
+                                    <Input
+                                      id="repay-amount"
+                                      type="number"
+                                      inputMode="decimal"
+                                      min={0}
+                                      className="h-10"
+                                      value={repayAmount}
+                                      onChange={(event) => setRepayAmount(event.target.value)}
+                                    />
+                                  </Field>
+                                  <Field>
+                                    <FieldLabel htmlFor="repay-method">Method</FieldLabel>
+                                    <Select
+                                      value={repayMethod}
+                                      onValueChange={(value) =>
+                                        setRepayMethod((value as Exclude<PaymentMethod, 'split'>) ?? 'cash')
+                                      }
+                                    >
+                                      <SelectTrigger id="repay-method" className="h-10 w-full">
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value="cash">Cash</SelectItem>
+                                        <SelectItem value="transfer">Transfer</SelectItem>
+                                        <SelectItem value="pos_card">POS card</SelectItem>
+                                        <SelectItem value="wallet">Wallet</SelectItem>
+                                      </SelectContent>
+                                    </Select>
+                                  </Field>
+                                </div>
+                                {repayError && (
+                                  <p role="alert" className="text-xs text-destructive">
+                                    {repayError}
+                                  </p>
+                                )}
+                                <div className="flex gap-2">
+                                  <Button
+                                    className="h-9 flex-1"
+                                    disabled={repayBusy}
+                                    onClick={() => void recordRepayment()}
+                                  >
+                                    {repayBusy ? 'Recording…' : 'Record repayment'}
+                                  </Button>
+                                  <Button
+                                    variant="outline"
+                                    className="h-9"
+                                    disabled={repayBusy}
+                                    onClick={() => {
+                                      setRepayTargetId(null);
+                                      setRepayError(null);
+                                    }}
+                                  >
+                                    Cancel
+                                  </Button>
+                                </div>
+                              </div>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                )}
+
+                {repayHistory.length > 0 && (
+                  <div className="space-y-2">
+                    <SectionTitle>Payment records</SectionTitle>
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>When</TableHead>
+                          <TableHead>Method</TableHead>
+                          <TableHead className="text-right">Amount</TableHead>
+                          <TableHead>By</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {repayHistory.map((row) => (
+                          <TableRow key={row.id}>
+                            <TableCell className="text-muted-foreground">
+                              {formatWhen(row.recorded_at)}
+                            </TableCell>
+                            <TableCell className="capitalize">{row.method}</TableCell>
+                            <TableCell className="text-right">
+                              <Money value={row.amount} />
+                            </TableCell>
+                            <TableCell className="text-xs text-muted-foreground">
+                              {row.recorded_by ?? '—'}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
                 )}
 
                 <div className="space-y-2">

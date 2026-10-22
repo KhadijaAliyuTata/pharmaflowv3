@@ -7,6 +7,7 @@ import { getSupabase, isSupabaseConfigured } from './supabase';
 // `staff.ts` depends only on `client` and `result`, so this is not a cycle.
 import { redeemInvitation } from './supabase/staff';
 import { deploymentMode, isDemoMode } from './build-mode';
+import { clearBranchSnapshot } from '~/offline/branch-snapshot';
 import { setPharmacyCurrentUser } from '~/store/pharmacy';
 
 /**
@@ -115,7 +116,93 @@ export interface Session {
 
 
 
-/* ------------------------------------------------------------- subscriber */
+/* -------------------------------------------------------- demo session control */
+
+/**
+ * DEVELOPMENT-SERVER ONLY. Four investor demos need one-click entry into the
+ * seeded owner and attendant experiences, and a clean exit that cannot disturb a
+ * real session.
+ *
+ * ## The contract
+ *
+ *   * A demo entry NEVER writes the profile cache (`pharmaflow:profile:v1` is the
+ *     REAL identity cache this module manages), never touches Supabase Auth, and
+ *     can never run outside `isDemoMode()` — the same constant-false fold that
+ *     makes `switchRole` safe. In a production build these functions throw
+ *     unconditionally and the bundle keeps no demo users (verified the same way
+ *     `verify-auth-modes.ts` verifies the gate).
+ *   * The chosen demo role is kept under a NAMESPACE-CLEAN key, `pf-demo:role`, so a
+ *     reload mid-demo restores the same role (the store already restores its
+ *     seeded data). The key never grants anything: the demo session exists only
+ *     because the build permits it, and its user is a seeded fixture
+ *     (`usr-owner` / `usr-assistant`), never a real account or a tenant row.
+ *   * `signOut` REPLACED by demo exit while a demo session is active: it does not
+ *     call Supabase sign-out, so a tester signed into a real account in another
+ *     tab is not silently logged out. On exit, a previously real Supabase
+ *     session is re-adopted if present, otherwise the app returns to anonymous.
+ */
+const DEMO_ROLE_KEY = 'pf-demo:role';
+
+function readDemoRoleKey(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.localStorage.getItem(DEMO_ROLE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function findDemoUser(role: string | null): User | null {
+  if (!role) return null;
+  return DEMO_USERS.find((candidate) => candidate.role === role) ?? null;
+}
+
+/** One-click entry into the seeded owner or attendant demo. Dev server only. */
+export function enterDemoSession(role: User['role']): void {
+  if (!isDemoMode()) {
+    throw new Error('Demo sessions exist only in a development server with demo mode enabled.');
+  }
+  const user = findDemoUser(role) ?? DEMO_USERS[0]!;
+  try {
+    window.localStorage.setItem(DEMO_ROLE_KEY, role);
+  } catch {
+    /* private mode: the demo still starts; a reload restores the default owner */
+  }
+  setPharmacyCurrentUser(user);
+  emit({ user, status: 'authenticated', offline: false });
+}
+
+/** Leaves the demo and restores the real session exactly as it was. */
+export function exitDemoSession(): void {
+  if (!isDemoMode()) return;
+  try {
+    window.localStorage.removeItem(DEMO_ROLE_KEY);
+  } catch {
+    /* ignore */
+  }
+  clearCache();
+  if (!isSupabaseConfigured()) {
+    emit({ user: null, status: 'anonymous', offline: false });
+    return;
+  }
+  // Best-effort restore of a real session that existed before the demo. Nothing
+  // is signed OUT: if a real session exists it is read and adopted as-is; if not,
+  // the app simply becomes anonymous.
+  void getSupabase()
+    .auth.getSession()
+    .then(({ data }) => {
+      if (data.session) {
+        void adoptSession(data.session.user.id, data.session.user.email ?? '');
+      } else {
+        emit({ user: null, status: 'anonymous', offline: false });
+      }
+    })
+    .catch(() => {
+      emit({ user: null, status: 'anonymous', offline: false });
+    });
+}
+
+/* ------------------------------------------------------------ subscriber */
 
 /**
  * The initial session, computed before anything mounts.
@@ -244,10 +331,12 @@ export function startSession(): void {
   // here was the largest single authentication bypass in the codebase, and it is
   // now unreachable outside a development server.
   if (DEMO_SESSION) {
-    // Development server only. Whoever opens the URL is signed straight in as the
-    // owner so the interface is visible immediately. There is no backend here.
+    // Development server only. The demo ROLE chosen on /demo is preserved across
+    // a reload; otherwise the seeded owner is what opens, exactly as before.
+    // There is no backend here.
+    const byRole = findDemoUser(readDemoRoleKey());
     const cached = readCache();
-    const user = cached?.user ?? DEMO_USERS[0]!;
+    const user = byRole ?? cached?.user ?? DEMO_USERS[0]!;
     setPharmacyCurrentUser(user);
     emit({ user, status: 'authenticated', offline: false });
     return;
@@ -298,6 +387,7 @@ export function startSession(): void {
   supabase.auth.onAuthStateChange((_event, session) => {
     if (!session) {
       clearCache();
+      clearBranchSnapshot();
       emit({ user: null, status: 'anonymous', offline: false });
       return;
     }
@@ -721,7 +811,17 @@ export async function refreshSessionProfile(): Promise<void> {
 }
 
 export function signOut(): void {
+  // A demo session never came from Supabase, so "sign out" must not sign out of
+  // Supabase: a tester signed into a real account in a dev browser would lose
+  // their real session to a demo's exit button. Demo exit restores instead.
+  if (isDemoMode() && readDemoRoleKey()) {
+    exitDemoSession();
+    return;
+  }
   clearCache();
+  // The saved branch is identity-scoped evidence, not an independent login. It
+  // must not survive a sign-out on a shared till.
+  clearBranchSnapshot();
   if (isSupabaseConfigured()) void getSupabase().auth.signOut();
   emit({ user: null, status: 'anonymous', offline: false });
 }

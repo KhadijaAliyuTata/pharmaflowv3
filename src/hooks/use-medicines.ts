@@ -69,7 +69,7 @@ export function useMedicines(): MedicinesState {
   // Only consulted in demo mode. In live mode this selector is never read, so a
   // stale local catalogue cannot reach the screen.
   const localMedicines = usePharmacy((state) => state.medicines);
-  const { status, currentBranchId, error: branchError } = useActiveBranch();
+  const { status, currentBranchId, error: branchError, source: branchSource } = useActiveBranch();
 
   const [remote, setRemote] = useState<{ branchId: string; medicines: Medicine[] } | null>(
     null,
@@ -78,8 +78,10 @@ export function useMedicines(): MedicinesState {
   const [loading, setLoading] = useState(false);
 
   // Guards against a slow response for a branch the user has since left
-  // overwriting the list for the branch they are actually on.
-  const inFlight = useRef<string | null>(null);
+  // overwriting the list for the branch they are actually on. A sequence number
+  // also lets a newer retry supersede an older in-flight read instead of being
+  // suppressed by a permanently stuck "in flight" sentinel.
+  const requestSeq = useRef(0);
   // Bumped by `refresh()`. In the effect's dependencies so a post-write re-read
   // actually happens, rather than the hook returning the copy it already has.
   const [reloadToken, setReloadToken] = useState(0);
@@ -95,17 +97,15 @@ export function useMedicines(): MedicinesState {
     if (!useRemote || !currentBranchId) return;
 
     const branch = currentBranchId;
-    if (inFlight.current === branch) return;
-    inFlight.current = branch;
-
+    const seq = ++requestSeq.current;
     let cancelled = false;
     setLoading(true);
+    setError(null);
 
     void (async () => {
       const result = await listMedicines();
 
-      if (cancelled) return;
-      inFlight.current = null;
+      if (cancelled || seq !== requestSeq.current) return;
 
       if (!result.ok) {
         // Kept for development. A raw PostgREST error can name internal objects,
@@ -125,7 +125,7 @@ export function useMedicines(): MedicinesState {
     return () => {
       cancelled = true;
     };
-  }, [useRemote, currentBranchId, reloadToken]);
+  }, [useRemote, currentBranchId, reloadToken, branchSource]);
 
   return useMemo(() => {
     // ---- demo / no backend. The seed catalogue is the product here. -------------
@@ -158,6 +158,20 @@ export function useMedicines(): MedicinesState {
       return {
         medicines: remote.medicines,
         loading,
+        error,
+        source: 'supabase' as const,
+        branchId: currentBranchId,
+        refresh,
+      };
+    }
+
+    // A failed read is a settled state, not an endless loading state. Returning
+    // `loading: true` here made storage/network failures indistinguishable from
+    // "still trying" and hid the error from every caller.
+    if (error) {
+      return {
+        medicines: [],
+        loading: false,
         error,
         source: 'supabase' as const,
         branchId: currentBranchId,

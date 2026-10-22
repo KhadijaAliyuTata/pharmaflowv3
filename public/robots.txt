@@ -1,0 +1,9 @@
+User-agent: *
+Allow: /
+
+# The application itself is behind authentication; the public landing page is
+# the only page intended for indexing.
+Disallow: /dashboard
+Disallow: /login
+Disallow: /join
+Disallow: /platform

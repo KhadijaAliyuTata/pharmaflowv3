@@ -3,11 +3,14 @@ import type {
   AuditAction,
   CartLine,
   CreditAccount,
+  Customer,
   Medicine,
   PaymentMethod,
   Role,
   Sale,
   SaleItem,
+  SalePayment,
+  SaleStatus,
   StockMovement,
   StockReceipt,
   User,
@@ -167,6 +170,13 @@ export interface CheckoutInput {
   customerId?: string;
   creditAccountId?: string;
   dispensedAgainstPrescription?: boolean;
+  /**
+   * The per-method parts of the amount collected, for a split payment. The sum
+   * must equal `amountPaid` exactly and at least two methods must carry money.
+   * Validated here and again by the server RPC, so a tampered client cannot
+   * invent an inconsistent breakdown.
+   */
+  paymentBreakdown?: SalePayment[];
 }
 
 export type CheckoutResult = {
@@ -245,6 +255,40 @@ export function checkout(state: AppState, input: CheckoutInput): Result<Checkout
     return fail<CheckoutResult>('Amount received is more than the total');
   }
 
+  // Split payments record exactly which methods covered the collected amount.
+  // The rules match the server RPC (`pf_complete_sale`, payment-breakdown step):
+  // every part is a real, positive method; the parts add up to the amount
+  // received; a sale labelled 'split' carries at least two of them. Validating
+  // here keeps the demo-store path and any future caller under the same law.
+  const breakdown = input.paymentBreakdown;
+  if (breakdown !== undefined) {
+    if (!Array.isArray(breakdown) || breakdown.length === 0) {
+      return fail<CheckoutResult>('The payment breakdown is empty');
+    }
+    if (breakdown.some((part) => part.method === 'split')) {
+      return fail<CheckoutResult>('A payment part must name a method — cash, transfer, POS card or wallet');
+    }
+    if (breakdown.some((part) => !Number.isFinite(part.amount) || part.amount <= 0)) {
+      return fail<CheckoutResult>('Every payment part must be a positive amount');
+    }
+    const breakdownSum = money(sum(breakdown.map((part) => part.amount)));
+    if (breakdownSum !== paid) {
+      return fail<CheckoutResult>(
+        `The payment parts add up to ₦${breakdownSum.toLocaleString('en-NG')}, not the amount received of ₦${paid.toLocaleString('en-NG')}`,
+      );
+    }
+  }
+  if (input.paymentMethod === 'split') {
+    if (breakdown === undefined) {
+      return fail<CheckoutResult>('A split payment must carry its breakdown of methods');
+    }
+    if (breakdown.filter((part) => part.amount > 0).length < 2) {
+      return fail<CheckoutResult>('A split payment needs at least two payment methods');
+    }
+  } else if (breakdown !== undefined) {
+    return fail<CheckoutResult>('A payment breakdown only belongs to a split payment');
+  }
+
   // 3. Unpaid balances are only allowed when someone is on the sale.
   const outstanding = subtract(total, paid);
   if (outstanding > 0 && !input.customerId && !input.creditAccountId) {
@@ -318,6 +362,9 @@ export function checkout(state: AppState, input: CheckoutInput): Result<Checkout
         }
       : {}),
     ...(account ? { creditAccountId: account.id } : {}),
+    ...(breakdown !== undefined
+      ? { paymentBreakdown: breakdown.map((part) => ({ ...part })) }
+      : {}),
     ...(input.dispensedAgainstPrescription ? { dispensedAgainstPrescription: true } : {}),
   };
 
@@ -461,26 +508,26 @@ export function voidSale(state: AppState, saleId: string, reason: string): Resul
   if (sale.creditAccountId && sale.outstandingBalance > 0) {
     next = {
       ...next,
-      creditAccounts: next.creditAccounts.map((a) =>
-        a.id === sale.creditAccountId
-          ? {
-              ...a,
-              outstandingBalance: Math.max(0, subtract(a.outstandingBalance, sale.outstandingBalance)),
-              ledger: [
-                {
-                  id: createId('led'),
-                  date: now(),
-                  type: 'payment' as const,
-                  amount: sale.outstandingBalance,
-                  balanceAfter: 0,
-                  note: `Voided ${sale.receiptNumber}`,
-                  referenceId: sale.id,
-                },
-                ...a.ledger,
-              ],
-            }
-          : a,
-      ),
+      creditAccounts: next.creditAccounts.map((a) => {
+        if (a.id !== sale.creditAccountId) return a;
+        const balanceAfter = Math.max(0, subtract(a.outstandingBalance, sale.outstandingBalance));
+        return {
+          ...a,
+          outstandingBalance: balanceAfter,
+          ledger: [
+            {
+              id: createId('led'),
+              date: now(),
+              type: 'payment' as const,
+              amount: sale.outstandingBalance,
+              balanceAfter,
+              note: `Voided ${sale.receiptNumber}`,
+              referenceId: sale.id,
+            },
+            ...a.ledger,
+          ],
+        };
+      }),
     };
   }
 
@@ -555,16 +602,20 @@ export function receiveStock(state: AppState, input: ReceiveInput): Result<Stock
   // can record what arrived but not what it cost, so the receipt goes to the
   // pricing queue instead of being confirmed.
   const cost = canApprovePricing(user.role) ? input.costPerBaseUnit : undefined;
-  const priced = cost !== undefined;
+  const price = canApprovePricing(user.role) ? input.pricePerBaseUnit : undefined;
+  const priced = cost !== undefined && price !== undefined;
 
   if (cost !== undefined && cost <= 0) {
     return fail('Cost must be greater than zero');
   }
-  if (priced && input.pricePerBaseUnit !== undefined) {
-    if (input.pricePerBaseUnit <= 0) return fail('Selling price must be greater than zero');
-    if (cost !== undefined && input.pricePerBaseUnit <= cost) {
+  if (price !== undefined) {
+    if (price <= 0) return fail('Selling price must be greater than zero');
+    if (cost !== undefined && price <= cost) {
       return fail('Selling price must be above cost');
     }
+  }
+  if (cost !== undefined && price === undefined) {
+    return fail('Selling price is required when setting a receipt cost');
   }
 
   const status: StockReceipt['status'] = priced ? 'confirmed' : 'pending_pricing';
@@ -1195,6 +1246,157 @@ export function recordCreditPayment(
 
 export function creditAccountsOverLimit(accounts: CreditAccount[]): CreditAccount[] {
   return accounts.filter((account) => account.outstandingBalance > account.creditLimit);
+}
+
+/* ------------------------------------------------- customer debt & repayments */
+
+/**
+ * Registers a customer from the POS, without leaving the sale.
+ *
+ * Both owner and attendant may do this: whoever is behind the counter must be
+ * able to name who owes. The phone number is the dedupe key (the same key the
+ * database enforces per pharmacy with `customers_phone_unique`), so an existing
+ * customer is never silently duplicated — the caller is told to search for them
+ * instead.
+ */
+export function registerCustomer(
+  state: AppState,
+  name: string,
+  phone: string,
+): Result<{ customer: Customer }> {
+  const user = state.currentUser;
+  if (!can(user.role, 'sell')) return fail('Only pharmacy staff can register a customer');
+
+  const trimmedName = name.trim();
+  if (trimmedName.length < 2) return fail('Give the customer a name');
+  const trimmedPhone = phone.trim();
+  // A tenant-safe identifier is the whole point of the field: an unnamed
+  // balance cannot be traced, collected or audited.
+  if (trimmedPhone.replace(/\D/g, '').length < 7) {
+    return fail('Give a phone number of at least 7 digits');
+  }
+
+  const existing = state.customers.find((c) => c.phone === trimmedPhone);
+  if (existing) {
+    return fail(
+      `${existing.name} is already registered with this number — search for them instead`,
+    );
+  }
+
+  const highest = state.customers
+    .map((c) => Number(c.code.replace(/^CUST-/, '')))
+    .filter((n) => Number.isFinite(n))
+    .reduce((max, n) => Math.max(max, n), 1000);
+
+  const customer: Customer = {
+    id: createId('cust'),
+    code: `CUST-${highest + 1}`,
+    name: trimmedName,
+    phone: trimmedPhone,
+    walletBalance: 0,
+    outstandingDebt: 0,
+    totalSpent: 0,
+    purchaseCount: 0,
+    registeredDate: now(),
+    consentForReminders: false,
+    chronicMedications: [],
+  };
+
+  const next: AppState = { ...state, customers: [...state.customers, customer] };
+  return ok(
+    withAudit(next, user, 'sale', `Registered customer ${customer.name} (${customer.phone})`, {
+      customerId: customer.id,
+    }),
+    { customer },
+  );
+}
+
+/**
+ * Records a repayment against one sale's outstanding balance.
+ *
+ * Owner OR attendant: collecting money the customer brought back is the till's
+ * job, whoever is working it. Everything moves atomically — sale, customer
+ * debt and the audit row — and a repayment that would overpay is refused, so
+ * the balance can only ever be read down to exactly zero. The repayment is
+ * appended to the sale's `paymentBreakdown` with its method, recorder and
+ * time, so repayment history is part of the sale record itself.
+ */
+export function recordCustomerPayment(
+  state: AppState,
+  saleId: string,
+  amount: number,
+  method: PaymentMethod,
+  note?: string,
+): Result<boolean> {
+  const user = state.currentUser;
+  if (!can(user.role, 'sell')) return fail('Your role cannot record repayments');
+  if (method === 'split') return fail('One method per repayment — record each part separately');
+
+  const sale = state.sales.find((s) => s.id === saleId);
+  if (!sale) return fail('Sale not found');
+  if (sale.status === 'voided' || sale.status === 'refunded') {
+    return fail('A voided or refunded sale cannot take a repayment');
+  }
+  if (!sale.customerId) {
+    return fail('This sale has no customer on it — repayments are recorded against a named customer');
+  }
+  if (sale.outstandingBalance <= 0) {
+    return fail('Nothing is outstanding on this sale');
+  }
+
+  const paidAmount = money(amount);
+  if (paidAmount <= 0) return fail('A repayment must be greater than zero');
+  if (paidAmount > sale.outstandingBalance) {
+    return fail(
+      `A repayment cannot exceed the outstanding balance of ₦${sale.outstandingBalance.toLocaleString('en-NG')}`,
+    );
+  }
+
+  const newOutstanding = subtract(sale.outstandingBalance, paidAmount);
+  const nextStatus: SaleStatus = newOutstanding <= 0 ? 'paid' : 'part_paid';
+
+  let next: AppState = {
+    ...state,
+    sales: state.sales.map((s) =>
+      s.id === saleId
+        ? {
+            ...s,
+            amountPaid: add(s.amountPaid, paidAmount),
+            outstandingBalance: newOutstanding,
+            status: nextStatus,
+            paymentBreakdown: [
+              ...(s.paymentBreakdown ?? []),
+              {
+                method,
+                amount: paidAmount,
+                recordedBy: user.name,
+                recordedAt: now(),
+              },
+            ],
+          }
+        : s,
+    ),
+  };
+
+  next = {
+    ...next,
+    customers: next.customers.map((c) =>
+      c.id === sale.customerId
+        ? { ...c, outstandingDebt: Math.max(0, subtract(c.outstandingDebt, paidAmount)) }
+        : c,
+    ),
+  };
+
+  return ok(
+    withAudit(
+      next,
+      user,
+      'sale',
+      `Repayment on ${sale.receiptNumber}: ₦${paidAmount.toLocaleString('en-NG')}, balance ₦${newOutstanding.toLocaleString('en-NG')}`,
+      { saleId, amount: paidAmount, method },
+    ),
+    true,
+  );
 }
 
 /* ------------------------------------------------------------- notifications */

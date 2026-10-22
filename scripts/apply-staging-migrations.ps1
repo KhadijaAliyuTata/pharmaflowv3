@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Apply the 20 migrations to STAGING, self-gating, read-only until every check passes.
+    Apply the 23 migrations to STAGING, self-gating, read-only until every check passes.
 
 .DESCRIPTION
     Paste this into the PowerShell window where $env:PGURI is already set. It runs
@@ -15,7 +15,7 @@
       3. Local config preflight passes - staging configured, distinct from prod.
       4. Connection preflight passes - correct ref, not production, empty.
       5. Pre-migration dump is written.
-      6. Dry run names EXACTLY the 20 expected migrations, in order.
+      6. Dry run names EXACTLY the 23 expected migrations, in order.
       7. Dry run contains none of the stop-phrases.
       8. Apply, same explicit connection and arguments.
       9. Post-apply verification of history and schema.
@@ -94,7 +94,10 @@ $ExpectedMigrations = @(
     '20261012140000_platform_admin.sql',
     '20261012150000_redeem_invitation_idempotent.sql',
     '20261012160000_redeem_invitation_check_order.sql',
-    '20261012170000_receive_stock.sql'
+    '20261012170000_receive_stock.sql',
+    '20261018120000_pos_payments_split.sql',
+    '20261019120000_medicine_knowledge_base.sql',
+    '20261020120000_returns_and_price_updates.sql'
 )
 
 Write-Step '1. credential present'
@@ -159,7 +162,7 @@ Write-Host $drySafe
 
 # Checked for a clearer diagnosis rather than for safety: an errored dry run
 # names no migrations and is already caught by the exact-set check below. This
-# just stops the operator reading "expected 20, named 0" when the real problem is
+# just stops the operator reading "expected 23, named 0" when the real problem is
 # that the command failed.
 if ($dryCode -ne 0) { Stop-Run "the dry run itself FAILED (exit $dryCode). Its output cannot be trusted." }
 
@@ -202,7 +205,7 @@ foreach ($p in $stopPhrases) {
 }
 
 # The exact set AND its order. A count alone is not enough: a chain that dropped
-# one migration and gained another would still count 20 and sail through.
+# one migration and gained another would still count 23 and sail through.
 $mismatch = $null
 if ($found.Count -ne $ExpectedMigrations.Count) {
     $mismatch = "expected exactly $($ExpectedMigrations.Count) pending migrations, the dry run named $($found.Count)"
@@ -303,7 +306,7 @@ Write-Host (Redact $again)
 # verified nothing.
 #
 # The pre-apply gate does not have this problem: it requires EXACTLY the expected
-# set of 20, so an errored dry run yields nothing and stops. This one requires
+# set of 23, so an errored dry run yields nothing and stops. This one requires
 # zero, so the failure mode is inverted and the exit code has to be checked
 # explicitly.
 if ($againCode -ne 0) {
@@ -324,10 +327,10 @@ if ($againNames.Count -ne 0) {
 Write-Good 'a second dry run lists nothing - the chain is fully applied'
 
 Write-Step 'expected post-apply state - run these in the staging SQL editor'
-Write-Host '   select count(*) from supabase_migrations.schema_migrations;                      -- expect 20'
-Write-Host "   select count(*) from information_schema.tables where table_schema='public'`n     and table_type='BASE TABLE';                                              -- expect 19"
+Write-Host '   select count(*) from supabase_migrations.schema_migrations;                      -- expect 23'
+Write-Host "   select count(*) from information_schema.tables where table_schema='public'`n     and table_type='BASE TABLE';                                              -- expect 37"
 Write-Host "   select count(*) from information_schema.views where table_schema='public';                                    -- expect  8"
-Write-Host "   select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace`n    where n.nspname='public' and p.proname like 'pf\_%';                           -- expect 38"
+Write-Host "   select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace`n    where n.nspname='public' and p.proname like 'pf\_%';                           -- expect 70"
 Write-Host '   select status, count(*) from branches group by status;                          -- expect NO ROWS'
 
 Write-Host ''

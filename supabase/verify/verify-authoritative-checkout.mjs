@@ -163,6 +163,9 @@ async function sell(actorId, lines, opts = {}) {
     opts.creditAccountId ?? null,
     opts.prescription ?? false,
     opts.idempotencyKey ?? null,
+    opts.soldAt ?? null,
+    // Named array of {method, amount} parts for a split sale; null otherwise.
+    opts.breakdown ?? null,
   ];
 
   // `asAuthenticated` and `asActor` each wrap what they return, so the row comes
@@ -179,7 +182,9 @@ async function sell(actorId, lines, opts = {}) {
            p_customer_id => $6,
            p_credit_account_id => $7,
            p_dispensed_against_prescription => $8,
-           p_idempotency_key => $9
+           p_idempotency_key => $9,
+           p_sold_at => $10,
+           p_payment_breakdown => $11::jsonb
          )`,
         params,
       );
@@ -190,6 +195,30 @@ async function sell(actorId, lines, opts = {}) {
   if (!call.ok) return { ok: false, err: call.err };
   return { ok: true, ...call.value };
 }
+
+/** Calls the customer-debt repayment RPC as a signed-in staff member. */
+async function repay(actorId, saleId, amount, method = 'cash') {
+  const call = await asAuthenticated(database, () =>
+    asActor(database, actorId, async () => {
+      const { rows } = await database.query(
+        `select * from public.pf_record_customer_payment(
+           p_sale_id => $1, p_amount => $2, p_method => $3::public.payment_kind, p_note => null
+         )`,
+        [saleId, amount, method],
+      );
+      return rows[0];
+    }),
+  );
+  if (!call.ok) return { ok: false, err: call.err };
+  return { ok: true, ...call.value };
+}
+
+const paymentsOf = async (saleId) =>
+  await query(
+    database,
+    `select method::text, amount from public.sale_payments where sale_id = $1 order by amount, method::text`,
+    [saleId],
+  );
 
 const qtyOf = async (batchId) =>
   (await query(database, `select quantity from medicine_batches where id = $1`, [batchId]))[0].quantity;
@@ -745,9 +774,196 @@ section('PROTECTION: the function never hands cost data back to the caller');
   );
 }
 
+/* ============================================================ POS payments */
+
+section('PAYMENTS: an ordinary sale writes one payment row for the collected amount');
+
+{
+  const r = await sell(ids.ASSISTANT_A, line(medA, 'strip', 1), { amountPaid: 45 });
+  check('the sale was accepted', r.ok, r.ok ? r.receipt_number : r.err);
+  const rows = await paymentsOf(r.sale_id);
+  check(
+    'one row: cash, the amount received',
+    rows.length === 1 && rows[0].method === 'cash' && Number(rows[0].amount) === 45,
+    JSON.stringify(rows),
+  );
+}
+
+section('PAYMENTS: a split sale stores one row per method, summing to the amount received');
+
+{
+  const r = await sell(ids.ASSISTANT_A, line(medA, 'tablet', 9), {
+    amountPaid: 45,
+    paymentMethod: 'split',
+    breakdown: [
+      { method: 'cash', amount: 20 },
+      { method: 'transfer', amount: 25 },
+    ],
+  });
+  check('the split sale was accepted', r.ok, r.ok ? r.receipt_number : r.err);
+  const rows = await paymentsOf(r.sale_id);
+  const total = rows.reduce((t, row) => t + Number(row.amount), 0);
+  check('two payment rows were written', rows.length === 2, JSON.stringify(rows));
+  check('the parts add up to the amount received', total === 45, String(total));
+  check(
+    'methods are recorded, not just the sum',
+    rows.every((row) => ['cash', 'transfer'].includes(row.method)),
+    JSON.stringify(rows.map((row) => row.method)),
+  );
+}
+
+section('PAYMENTS: a split part-payment leaves an outstanding balance on a named customer');
+
+{
+  // 2 strips = 90. 25 collected (15 cash + 10 transfer); customer owes 65.
+  const r = await sell(ids.ASSISTANT_A, line(medA, 'strip', 2), {
+    amountPaid: 25,
+    paymentMethod: 'split',
+    breakdown: [
+      { method: 'cash', amount: 15 },
+      { method: 'transfer', amount: 10 },
+    ],
+    customerId: CUSTOMER,
+  });
+  check('the split part-payment was accepted', r.ok, r.ok ? r.receipt_number : r.err);
+
+  const state = (await query(database, `select state::text, amount_paid, outstanding from sales where id = $1`, [r.sale_id]))[0];
+  check('the sale is part_paid', state.state === 'part_paid', state.state);
+  check('amount_paid is 25', Number(state.amount_paid) === 25, String(state.amount_paid));
+  check('outstanding is 65', Number(state.outstanding) === 65, String(state.outstanding));
+
+  const debt = (await query(database, `select outstanding_debt from customers where id = $1`, [CUSTOMER]))[0];
+  check('the customer debt moved', Number(debt.outstanding_debt) >= 65, String(debt.outstanding_debt));
+
+  // The parts were still written, not just the total.
+  const rows = await paymentsOf(r.sale_id);
+  check('the split parts were recorded even with a balance left', rows.length === 2, JSON.stringify(rows));
+}
+
+section('PAYMENTS: a broken breakdown is refused before anything is written');
+
+{
+  const before = await saleCount();
+  const tooMany = await sell(ids.ASSISTANT_A, line(medA, 'tablet', 1), {
+    amountPaid: 5,
+    paymentMethod: 'split',
+    breakdown: [{ method: 'cash', amount: 9 }],
+  });
+  check('parts summing to more than amount_paid is refused', !tooMany.ok, tooMany.ok ? 'accepted' : tooMany.err);
+
+  const splitWithNoParts = await sell(ids.ASSISTANT_A, line(medA, 'tablet', 1), {
+    amountPaid: 5,
+    paymentMethod: 'split',
+  });
+  check('a split sale without a breakdown is refused', !splitWithNoParts.ok, splitWithNoParts.ok ? 'accepted' : splitWithNoParts.err);
+
+  const unknownMethod = await sell(ids.ASSISTANT_A, line(medA, 'tablet', 1), {
+    amountPaid: 5,
+    paymentMethod: 'split',
+    breakdown: [
+      { method: 'cash', amount: 3 },
+      { method: 'bitcoin', amount: 2 },
+    ],
+  });
+  check('an invented method in the breakdown is refused', !unknownMethod.ok, unknownMethod.ok ? 'accepted' : unknownMethod.err);
+
+  const zeroPart = await sell(ids.ASSISTANT_A, line(medA, 'tablet', 1), {
+    amountPaid: 5,
+    paymentMethod: 'split',
+    breakdown: [
+      { method: 'cash', amount: 0 },
+      { method: 'transfer', amount: 5 },
+    ],
+  });
+  check('a zero part is refused — a split is two real payments', !zeroPart.ok, zeroPart.ok ? 'accepted' : zeroPart.err);
+
+  check('nothing was written by any of the refusals', (await saleCount()) === before);
+}
+
+section('REPAYMENT: a customer balance settles down to exactly zero');
+
+{
+  // 4 strips = 180. 80 collected, 100 outstanding on the customer.
+  const sale = await sell(ids.ASSISTANT_A, line(medA, 'strip', 4), {
+    amountPaid: 80,
+    customerId: CUSTOMER,
+  });
+  check('the unpaid-balance sale was accepted', sale.ok, sale.ok ? sale.receipt_number : sale.err);
+
+  const first = await repay(ids.ASSISTANT_A, sale.sale_id, 60, 'transfer');
+  check('an attendant can record a repayment', first.ok, first.ok ? first.receipt_number : first.err);
+  check(
+    'the sale moved to 140 paid / 40 outstanding',
+    first.ok && Number(first.amount_paid) === 140 && Number(first.outstanding) === 40,
+    first.ok ? `${first.amount_paid}/${first.outstanding}` : '',
+  );
+  check('the sale is still part_paid', first.ok && first.state === 'part_paid', String(first.state));
+
+  const final = await repay(ids.OWNER_A, sale.sale_id, 40, 'cash');
+  check('the owner can record the final repayment', final.ok, final.ok ? final.receipt_number : final.err);
+  check('the sale settled to paid', final.ok && final.state === 'paid', String(final.state));
+  check('nothing remains outstanding', final.ok && Number(final.outstanding) === 0, String(final.outstanding));
+  check(
+    'the returned customer debt matches the customer row',
+    final.ok &&
+      Number(final.customer_outstanding_debt) ===
+        Number((await query(database, `select outstanding_debt from customers where id = $1`, [CUSTOMER]))[0].outstanding_debt),
+  );
+
+  const rows = await paymentsOf(sale.sale_id);
+  check(
+    'three payment rows: the original payment and both repayments',
+    rows.length === 3,
+    JSON.stringify(rows),
+  );
+  check(
+    'each repayment carries its own method',
+    rows.filter((row) => row.method === 'transfer').length === 1 &&
+      rows.filter((row) => row.method === 'cash').length === 2,
+    JSON.stringify(rows),
+  );
+}
+
+section('REPAYMENT: refusals');
+
+{
+  const sale = await sell(ids.ASSISTANT_A, line(medA, 'strip', 2), {
+    amountPaid: 25,
+    customerId: CUSTOMER,
+  });
+  check('the fixture sale was accepted', sale.ok, sale.ok ? sale.receipt_number : sale.err);
+
+  const overpay = await repay(ids.ASSISTANT_A, sale.sale_id, 999, 'cash');
+  check('a repayment above the outstanding balance is refused', !overpay.ok, overpay.ok ? 'accepted' : overpay.err);
+
+  const zero = await repay(ids.ASSISTANT_A, sale.sale_id, 0, 'cash');
+  check('a zero repayment is refused', !zero.ok, zero.ok ? 'accepted' : zero.err);
+
+  const split = await repay(ids.ASSISTANT_A, sale.sale_id, 10, 'split');
+  check('a split repayment is refused — record each part separately', !split.ok, split.ok ? 'accepted' : split.err);
+
+  // Another pharmacy's staff must not reach across branches.
+  const otherBranch = await repay(ids.OWNER_B, sale.sale_id, 10, 'cash');
+  check('another pharmacy\'s staff cannot repay a foreign sale', !otherBranch.ok, otherBranch.ok ? 'accepted' : otherBranch.err);
+
+  // Settling the last naira must also lock the sale against a second pass.
+  const settle = await repay(ids.ASSISTANT_A, sale.sale_id, 65, 'cash');
+  check('the sale settled in full', settle.ok && settle.state === 'paid', settle.ok ? settle.state : settle.err);
+  const again = await repay(ids.ASSISTANT_A, sale.sale_id, 10, 'cash');
+  check('a fully settled sale takes no further repayment', !again.ok, again.ok ? 'accepted' : again.err);
+
+  const anon = await asAnon(database, () =>
+    database.query(`select * from public.pf_record_customer_payment(p_sale_id => $1, p_amount => 1, p_method => 'cash')`, [
+      sale.sale_id,
+    ]),
+  );
+  check('anon cannot call the repayment RPC', !anon.ok, anon.ok ? 'reached the function' : anon.err);
+}
+
 note(
   'concurrency is not exercised here',
   'PGlite is single-connection; overlapping transactions and the FOR UPDATE locks need two live connections against real Postgres',
 );
+
 
 process.exit(await finish(database));

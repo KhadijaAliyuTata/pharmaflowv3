@@ -5,17 +5,14 @@ import {
   AlertTriangle,
   ArrowRight,
   Banknote,
-  Bell,
   ChevronRight,
   Coins,
   Inbox,
   Lock,
   Radio,
-  ShieldCheck,
   Tablets,
   TriangleAlert,
   TrendingUp,
-  UserPlus,
   Users,
 } from 'lucide-react';
 import { Badge } from '~/components/ui/badge';
@@ -56,7 +53,6 @@ import {
   operationalActivities,
   stockValuation,
   stockValuationTotals,
-  teamMembers,
   type LedgerFilter,
 } from '~/domain/dashboard';
 import { dashboardSnapshot, reorderSuggestions } from '~/domain/selectors';
@@ -65,10 +61,9 @@ import { useAuditEvents } from '~/hooks/use-audit-events';
 import { useMedicines } from '~/hooks/use-medicines';
 import { useIsOwner } from '~/hooks/use-is-owner';
 import { useSales } from '~/hooks/use-sales';
-import { useNotifications } from '~/hooks/use-notifications';
 import { useCurrentUser, usePharmacy, usePharmacyState } from '~/store/pharmacy';
 
-export const Route = createFileRoute('/_app/')({
+export const Route = createFileRoute('/_app/dashboard')({
   component: Dashboard,
 });
 
@@ -114,18 +109,6 @@ function Dashboard() {
     () => dashboardSnapshot(storeSnapshot, medicines),
     [storeSnapshot, medicines],
   );
-  // Notifications from Supabase in live mode, the seeded alerts in demo mode.
-  // Empty and flagged while it loads or if it fails, never the prototype's list.
-  const {
-    notifications: allNotifications,
-    unreadCount,
-    loading: notificationsLoading,
-    error: notificationsError,
-  } = useNotifications();
-  const notifications = useMemo(
-    () => allNotifications.filter((n) => !n.read).slice(0, 4),
-    [allNotifications],
-  );
   const creditAccounts = usePharmacy((state) => state.creditAccounts);
   const suppliers = usePharmacy((state) => state.suppliers);
   const reorder = useMemo(
@@ -145,7 +128,6 @@ function Dashboard() {
     error: auditError,
   } = useAuditEvents();
   const medicineRequests = usePharmacy((state) => state.medicineRequests);
-  const users = usePharmacy((state) => state.users);
   const user = useCurrentUser();
   // Authoritative: pf_is_owner() reads branch_memberships.role.
   const isOwner = useIsOwner();
@@ -168,7 +150,6 @@ function Dashboard() {
   const expiring = useMemo(() => expiringStockSummary({ medicines }), [medicines]);
   const radar = useMemo(() => demandRadar({ medicineRequests }, 7), [medicineRequests]);
   const radarSummary = useMemo(() => demandRadarSummary(radar), [radar]);
-  const team = useMemo(() => teamMembers({ users, sales }), [users, sales]);
 
   /* ------------------------------------------------------------ audit ledger */
 
@@ -487,106 +468,7 @@ function Dashboard() {
         </Card>
       )}
 
-      {/* 8. Pharmacy Team / staff accountability. */}
-      <Card>
-        <CardHeader className="border-b pb-3">
-          <SectionTitle
-            action={
-              // Same rule as the audit-log link above: `/staff` is owner-only.
-              isOwner && (
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    render={<Link to="/staff" />}
-                  >
-                    <UserPlus className="size-3.5" />
-                    Add Staff
-                  </Button>
-                </div>
-              )
-            }
-          >
-            Pharmacy Team — {team.length} member{team.length === 1 ? '' : 's'}
-          </SectionTitle>
-        </CardHeader>
-        <CardContent className="space-y-3 px-0">
-          {team.length === 0 ? (
-            <p className="px-4 py-8 text-center text-sm text-muted-foreground">
-              No staff on this branch yet.
-            </p>
-          ) : (
-            <>
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Name</TableHead>
-                      <TableHead>Phone</TableHead>
-                      <TableHead>Role</TableHead>
-                      <TableHead className="text-right">Sales total</TableHead>
-                      <TableHead className="text-right">Discounts</TableHead>
-                      <TableHead>Access</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {team.map((member) => (
-                      <TableRow key={member.userId}>
-                        <TableCell className="font-medium">{member.name}</TableCell>
-                        <TableCell data-numeric className="tabular text-muted-foreground">
-                          {member.phone}
-                        </TableCell>
-                        <TableCell className="text-muted-foreground">
-                          {member.roleLabel}
-                        </TableCell>
-                        {/* Takings and discounts given are what the audit log
-                            already proves, so they are the accountability
-                            figures. Discounts are owner-only. */}
-                        <TableCell data-numeric className="tabular text-right">
-                          {isOwner ? (
-                            <Money value={member.salesTotal} compact />
-                          ) : (
-                            <span className="text-muted-foreground">
-                              {member.transactionCount} sales
-                            </span>
-                          )}
-                        </TableCell>
-                        <TableCell data-numeric className="tabular text-right">
-                          {isOwner ? (
-                            <Money value={member.discountTotal} compact />
-                          ) : (
-                            <Lock className="ml-auto size-3.5 text-muted-foreground" />
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="success" className="gap-1">
-                            <ShieldCheck className="size-3" />
-                            Active
-                          </Badge>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-
-              {/* Why this is not a form. Adding a staff member needs an
-                  authentication account created server-side; there is no
-                  client-side operation for it, and inventing one would either
-                  fail silently or write a fake user. */}
-              <p className="flex items-start gap-1.5 px-4 text-xs text-muted-foreground">
-                <Lock className="mt-0.5 size-3 shrink-0" />
-                Creating a staff account, and revoking access when someone leaves,
-                need the Supabase admin API and are not wired up. Until they are,
-                no credential or impersonation control is offered here — see
-                /staff for the audit trail.
-              </p>
-            </>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* 9. Operational Activities — the filterable ledger. */}
+      {/* 8. Operational Activities — the filterable ledger. */}
       <Card>
         <CardHeader className="border-b pb-3">
           <SectionTitle
@@ -724,117 +606,6 @@ function Dashboard() {
           )}
         </CardContent>
       </Card>
-
-      {/* Operational detail that did not earn a headline slot. */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <Card>
-          <CardHeader className="pb-2">
-            <SectionTitle
-              action={
-                <Button variant="ghost" size="sm" render={<Link to="/stock-intelligence" />}>
-                  See all
-                </Button>
-              }
-            >
-              Reorder urgently
-            </SectionTitle>
-          </CardHeader>
-          <CardContent>
-            {urgent.length === 0 ? (
-              <p className="py-6 text-center text-sm text-muted-foreground">
-                Nothing is at risk of running out.
-              </p>
-            ) : (
-              <ul className="divide-y">
-                {urgent.map((item) => (
-                  <li
-                    key={item.medicine.id}
-                    className="flex items-start justify-between gap-3 py-2.5"
-                  >
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium">{item.medicine.name}</p>
-                      <p className="truncate text-xs text-muted-foreground">{item.reason}</p>
-                    </div>
-                    <div className="shrink-0 text-right">
-                      <Badge variant="destructive">Out of stock</Badge>
-                      {/* Estimated cost is a purchase price, so it follows the
-                          same owner gate as everywhere else. */}
-                      {isOwner && (
-                        <p data-numeric className="tabular mt-1 text-xs text-muted-foreground">
-                          <MaybeMoney value={item.estimatedCost} compact />
-                        </p>
-                      )}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <SectionTitle
-              action={
-                unreadCount > 0 ? (
-                  <Button variant="ghost" size="sm" render={<Link to="/notifications" />}>
-                    {unreadCount} unread
-                  </Button>
-                ) : undefined
-              }
-            >
-              Notifications
-            </SectionTitle>
-          </CardHeader>
-          <CardContent>
-            {notificationsError ? (
-              <p role="alert" className="py-6 text-center text-sm text-muted-foreground">
-                {notificationsError}
-              </p>
-            ) : notificationsLoading && notifications.length === 0 ? (
-              <p className="py-6 text-center text-sm text-muted-foreground">
-                Loading notifications…
-              </p>
-            ) : notifications.length === 0 ? (
-              <p className="py-6 text-center text-sm text-muted-foreground">
-                You are all caught up.
-              </p>
-            ) : (
-              <ul className="divide-y">
-                {notifications.map((notification) => (
-                  <li key={notification.id} className="py-2.5">
-                    <div className="flex items-start gap-2">
-                      <Bell className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <p className="truncate text-sm font-medium">{notification.title}</p>
-                          <Badge
-                            variant={
-                              notification.severity === 'urgent'
-                                ? 'destructive'
-                                : notification.severity === 'warning'
-                                  ? 'warning'
-                                  : 'secondary'
-                            }
-                          >
-                            {notification.severity}
-                          </Badge>
-                        </div>
-                        <p className="truncate text-xs text-muted-foreground">
-                          {notification.message}
-                        </p>
-                      </div>
-                      <span className="shrink-0 text-xs text-muted-foreground">
-                        {formatRelative(notification.date)}
-                      </span>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </CardContent>
-        </Card>
-      </div>
 
       {/* Reference-list sizes. Catalogue size is deliberately absent: it is a
           headline figure above, and repeating the same count under a second name

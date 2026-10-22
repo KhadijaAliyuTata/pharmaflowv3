@@ -382,10 +382,11 @@ try {
   // database did not honour it, this script must not proceed to read anything,
   // let alone be trusted with the word "read-only".
   const [ro] = await sql`show default_transaction_read_only`;
-  if (String(ro?.v ?? '').toLowerCase() !== 'on') {
+  const readOnly = ro?.default_transaction_read_only;
+  if (readOnly !== 'on') {
     say('');
     fail('Could not establish a read-only session.');
-    say(`  default_transaction_read_only = ${ro?.v ?? '<unset>'}`);
+    say(`  default_transaction_read_only = ${readOnly ?? '<unset>'}`);
     say('  Refusing to continue: this script cannot honour its own guarantee.');
     await sql.end({ timeout: 1 });
     process.exit(EXIT_UNVERIFIED);

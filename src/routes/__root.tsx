@@ -6,11 +6,13 @@ import {
 } from '@tanstack/react-router';
 import { ScriptOnce } from '@tanstack/react-router';
 import { AuthProvider } from '~/components/auth-provider';
+import { isDemoMode } from '~/lib/build-mode';
 import { ThemeProvider } from '~/lib/theme';
 import { TooltipProvider } from '~/components/ui/tooltip';
 import { DefaultCatchBoundary } from '~/components/DefaultCatchBoundary';
 import { NotFound } from '~/components/NotFound';
 import appCss from '~/index.css?url';
+import { demoSeedAnchor } from '~/domain/seed';
 
 /**
  * Resolves the theme before first paint.
@@ -58,11 +60,50 @@ export const Route = createRootRoute({
  * The root route owns the document. `HeadContent` must be rendered or every
  * entry in `head()` is dropped — including the stylesheet link.
  */
+/**
+ * Offline-shell registration — SPIKE.
+ *
+ * Registered only in a production build, so `vite dev` is never affected. The
+ * worker itself lives at `public/sw.js`. Real implementation will move to a
+ * dedicated module with update/consent handling.
+ */
+const registerSw = `
+if ('serviceWorker' in navigator && ${JSON.stringify(import.meta.env.PROD)}) {
+  window.addEventListener('load', function () {
+    navigator.serviceWorker.register('/sw.js').catch(function () {});
+  });
+}`;
+
+/**
+ * The fixed DEMO MODE indicator. Rendered only when `isDemoMode()` is true —
+ * which is constant-folded to false in every production build and in any dev
+ * server with Supabase configured ("live") — so no real deployment can ever
+ * display it. This is the persistent demo indicator shown alongside the demo
+ * the owner/attendant experiences, which otherwise look exactly like the real
+ * product (deliberately — they ARE the real product running on seeded data).
+ */
+function DemoModeBadge() {
+  if (!isDemoMode()) return null;
+  return (
+    <div
+      aria-live="polite"
+      className="fixed bottom-0 left-0 z-[100] rounded-tr-lg bg-[#043263] px-3 py-1.5 text-[11px] font-bold uppercase tracking-widest text-white shadow-lg"
+    >
+      DEMO MODE — sample data only
+    </div>
+  );
+}
+
 function RootComponent() {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html
+      lang="en"
+      data-demo-now={isDemoMode() ? demoSeedAnchor().toISOString() : undefined}
+      suppressHydrationWarning
+    >
       <head>
         <ScriptOnce>{themeInit}</ScriptOnce>
+        <ScriptOnce>{registerSw}</ScriptOnce>
         <HeadContent />
       </head>
       <body>
@@ -73,6 +114,7 @@ function RootComponent() {
             </AuthProvider>
           </TooltipProvider>
         </ThemeProvider>
+        <DemoModeBadge />
         <Scripts />
       </body>
     </html>
