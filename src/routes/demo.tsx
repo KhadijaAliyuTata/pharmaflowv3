@@ -153,10 +153,11 @@ function BackToWebsite() {
   return (
     <Link
       to="/"
+      aria-label="Back to the PharmaFlow website"
       className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-[#064276] shadow-sm transition hover:border-[#064276] hover:bg-slate-50"
     >
       <ArrowLeft className="size-4" aria-hidden />
-      Back to the PharmaFlow website
+      Back
     </Link>
   );
 }
