@@ -32,7 +32,7 @@ export interface SignOutResult {
 export async function signOutSafely(): Promise<SignOutResult> {
   if (isDemoMode()) {
     signOut();
-    return { purged: false, retained: false, pending: 0, warning: null };
+    return Promise.resolve({ purged: false, retained: false, pending: 0, warning: null });
   }
 
   const user = peekSession().user;
