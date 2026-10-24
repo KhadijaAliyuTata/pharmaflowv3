@@ -93,6 +93,13 @@
       //   PUBLIC_SUPABASE_ANON_KEY: "",
       //   PUBLIC_DEMO_MODE: "false"
       // },
+    },
+    "demo": {
+      "name": "pharmaflow-demo",
+      "main": "@cloudflare/react-start/server-entry",
+      "compatibility_date": "2026-09-28",
+      "compatibility_flags": ["nodejs_compat"],
+      "observability": { "enabled": true }
     }
   }
 }
