@@ -1,0 +1,8 @@
+feat(portal): add live customer authentication and portal access control
+
+- portal.ts: refactor usePortalCustomer() to fetch real customer record via getMyCustomerRecord() in live mode; demo mode unchanged
+- parties.ts: add isCustomer() RPC wrapper calling pf_is_customer()
+- supabase/index.ts: export isCustomer()
+- _portal.tsx: add live-mode guard requiring pf_is_customer(); demo mode unchanged; add access denied UI for non-customers
+
+Migration 5 fix (supabase/migrations/20261005190000_function_execute_hardening.sql): already removed two obsolete REVOKE statements on dropped pf_apply_sale_item_stock(uuid) signature.

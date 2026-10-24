@@ -1,0 +1,12 @@
+[35mdocs/STAGING-VALIDATION.md[m[36m:[m[32m28[m[36m:[m| 8 | `[1;31m20261005250000[m_branch_membership_role_authority.sql` | 226 | no |
+[35mdocs/STAGING-VALIDATION.md[m[36m:[m[32m29[m[36m:[m| 9 | `[1;31m20261005260000[m_role_change_auditability.sql` | 240 | no |
+[35mdocs/google-ai-studio-migration/SUPABASE_SETUP.md[m[36m:[m[32m53[m[36m:[m[1;31m20261005250000[m_branch_membership_role_authority.sql
+[35mdocs/google-ai-studio-migration/SUPABASE_SETUP.md[m[36m:[m[32m54[m[36m:[m[1;31m20261005260000[m_role_change_auditability.sql
+[35mscripts/selftest-dryrun-gate.mjs[m[36m:[m[32m21[m[36m:[m  '[1;31m20261005250000[m_branch_membership_role_authority.sql',
+[35mscripts/selftest-dryrun-gate.mjs[m[36m:[m[32m22[m[36m:[m  '[1;31m20261005260000[m_role_change_auditability.sql',
+[35msrc/lib/supabase/tenant.ts[m[36m:[m[32m15[m[36m:[m *     `[1;31m20261005250000[m_branch_membership_role_authority` made
+[35msupabase/migrations/20261005260000_role_change_auditability.sql[m[36m:[m[32m8[m[36m:[m-- [1;31m20261005250000[m_branch_membership_role_authority.sql), an unlogged change to it
+[35msupabase/verify/verify-platform-admin.mjs[m[36m:[m[32m907[m[36m:[m    // redefined in [1;31m20261005250000[m to read `branch_memberships` scoped to
+[35msupabase/verify/verify-role-audit.mjs[m[36m:[m[32m5[m[36m:[m * `[1;31m20261005250000[m_branch_membership_role_authority.sql`), so a change to it is a
+[35msupabase/verify/verify-role-audit.mjs[m[36m:[m[32m7[m[36m:[m * `[1;31m20261005260000[m_role_change_auditability.sql` nothing recorded it: an owner could
+[35msupabase/verify/verify-role-authority.mjs[m[36m:[m[32m12[m[36m:[m * `[1;31m20261005250000[m_branch_membership_role_authority.sql`. This suite is now a

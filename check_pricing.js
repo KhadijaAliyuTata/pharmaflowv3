@@ -1,0 +1,1 @@
+fetch('https://supabase.com/pricing').then(r=>r.text()).then(t=>console.log(t.slice(0,8000))).catch(e=>console.error(e.message))

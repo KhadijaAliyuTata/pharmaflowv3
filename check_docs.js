@@ -1,0 +1,1 @@
+fetch('https://supabase.com/docs/guides/platform/going-into-prod').then(r=>r.text()).then(t=>console.log(t.slice(0,10000))).catch(e=>console.error(e.message))
