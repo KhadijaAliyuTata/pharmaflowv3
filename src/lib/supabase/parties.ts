@@ -17,6 +17,16 @@ import { fromList, ok, type Result } from './result';
 const OFFLINE = 'Supabase is not configured';
 const NO_SESSION = 'Not signed in';
 
+/* -------------------------------------------------------------- customer identity */
+
+export async function isCustomer(): Promise<boolean> {
+  if (!isSupabaseConfigured()) return false;
+  if (!(await hasSession())) return false;
+  const { data, error } = await client().rpc('pf_is_customer');
+  if (error) return false;
+  return data === true;
+}
+
 /* -------------------------------------------------------------- customers */
 
 export async function listCustomers(): Promise<Result<CustomerRow[]>> {

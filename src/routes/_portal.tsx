@@ -6,11 +6,13 @@ import {
   redirect,
   useRouterState,
 } from '@tanstack/react-router';
+import { useEffect, useState } from 'react';
 import { Pill } from 'lucide-react';
 import { Badge } from '~/components/ui/badge';
 import { PORTAL_NAV } from '~/lib/portal';
 import { isDemoMode, peekSession, useSession } from '~/lib/session';
 import { useBranchName } from '~/lib/supabase/branch-context';
+import { isCustomer } from '~/lib/supabase/parties';
 import { usePharmacy } from '~/store/pharmacy';
 
 /**
@@ -35,22 +37,22 @@ import { usePharmacy } from '~/store/pharmacy';
  * for the server-rendered first paint. See the comment in `_app.tsx` for why the
  * server is allowed to render and only the client redirects.
  *
- * Live mode: the portal is hidden. `usePortalCustomer()` reads `state.customers[0]`
- * — one seeded prototype customer — and any signed-in user may reach this route, so
- * against a real database the portal would show one real customer's balance, debt
- * and receipts to whoever happens to be signed in. That is a data-exposure defect,
- * not a missing feature, so every non-demo build renders `PortalNotInBuild` in place
- * of the shell and mounts no portal screen at all. Unhiding it needs customer
- * identity first — `getMyCustomerRecord()` plus a guard requiring `is_customer`; see
- * docs/LIVE-DATA-PLAN.md §13.
+ * Live mode: the portal requires `is_customer` (pf_is_customer()). Only users
+ * with a linked customer record may access the portal. Staff, owners, and
+ * unrelated authenticated users are redirected to their pharmacy dashboard.
+ * Demo mode continues to work with seeded data for demonstration purposes.
  */
 export const Route = createFileRoute('/_portal')({
   beforeLoad: () => {
-    // A live deployment serves no portal to anyone, so the session is irrelevant:
-    // the shell renders `PortalNotInBuild` rather than bouncing an anonymous
-    // visitor to a login screen that could not unlock anything. See the note above.
-    if (!isDemoMode()) return;
+    // Demo mode: only require authentication (existing behavior)
+    if (isDemoMode()) {
+      if (peekSession().status === 'anonymous') {
+        throw redirect({ to: '/login' });
+      }
+      return;
+    }
 
+    // Live mode: require authentication AND customer role
     if (peekSession().status === 'anonymous') {
       throw redirect({ to: '/login' });
     }
@@ -59,6 +61,72 @@ export const Route = createFileRoute('/_portal')({
 });
 
 function PortalShell() {
+  const { status } = useSession();
+  const storedBranch = usePharmacy((state) => state.branch);
+  // Compatibility boundary, same as the sidebar: Supabase first, the prototype's
+  // localStorage branch as fallback. Display only.
+  const activeBranchName = useBranchName();
+  const branchName = activeBranchName ?? storedBranch.name;
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+
+  // Below the other hooks on purpose: an early return above them would be a
+  // conditional hook, and React tears the route down when the session resolves.
+  //
+  // Demo mode: render the portal shell with seeded data.
+  if (isDemoMode()) {
+    if (status === 'anonymous') return <Navigate to="/login" replace />;
+    return <PortalDemoShell />;
+  }
+
+  // Live mode: require customer role (pf_is_customer())
+  const [isCustomerRole, setIsCustomerRole] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    if (status !== 'authenticated') {
+      setIsCustomerRole(false);
+      return;
+    }
+    let cancelled = false;
+    void isCustomer().then((v) => {
+      if (!cancelled) setIsCustomerRole(v);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [status]);
+
+  if (status === 'loading' || isCustomerRole === null) {
+    return (
+      <div className="p-6 text-sm text-muted-foreground">
+        Checking your access…
+      </div>
+    );
+  }
+
+  if (!isCustomerRole) {
+    return (
+      <div className="mx-auto max-w-xl p-6">
+        <div className="rounded-xl border border-destructive/40 bg-destructive/5 p-6">
+          <h1 className="text-lg font-semibold text-destructive">Customer access required</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            This area is for pharmacy customers. Your account does not have a linked
+            customer profile, so the portal is not available.
+          </p>
+          <p className="mt-2 text-xs text-muted-foreground">
+            If you are a customer, ask your pharmacist to link your account.
+          </p>
+          <p className="mt-2 text-xs text-muted-foreground">
+            If you are pharmacy staff, please use the staff dashboard.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return <PortalDemoShell />;
+}
+
+function PortalDemoShell() {
   const { status } = useSession();
   const storedBranch = usePharmacy((state) => state.branch);
   // Compatibility boundary, same as the sidebar: Supabase first, the prototype's

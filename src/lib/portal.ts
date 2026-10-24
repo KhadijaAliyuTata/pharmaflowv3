@@ -1,10 +1,13 @@
 import type { LucideIcon } from 'lucide-react';
 import { Bell, House, Package, Search, User } from 'lucide-react';
-import { usePharmacy } from '~/store/pharmacy';
 import type { Branch } from '~/domain/state';
 import type { Customer, Medicine, Sale, StockStatus } from '~/domain/types';
 import { sellableQuantity, stockStatus } from '~/domain/selectors';
 import { daysUntil, isoDate } from '~/domain/money';
+import { useCallback, useEffect, useState } from 'react';
+import { getMyCustomerRecord, isCustomer } from '~/lib/supabase/parties';
+import { isDemoMode } from '~/lib/build-mode';
+import { getPharmacyState } from '~/store/pharmacy';
 
 /**
  * Everything the customer half of the app derives that the staff half does not.
@@ -21,6 +24,8 @@ import { daysUntil, isoDate } from '~/domain/money';
  *      availability list has exactly one entry. It is derived from real stock
  *      rather than padded out with invented pharmacies.
  */
+
+const LIVE_PORTAL_UNAVAILABLE = 'The customer portal is not connected to the pharmacy database yet.';
 
 /* -------------------------------------------------------------------- nav */
 
@@ -55,15 +60,61 @@ export function portalNavItem(pathname: string): PortalNavItem | undefined {
 /**
  * The customer the portal is showing.
  *
- * NOT AUTH. There is no sign-in. This reads `state.customers[0]` so the portal
- * renders real records; every screen states that per-customer authentication
- * is not built. Do not present anything here as "your account is verified".
+ * In demo mode: returns the first seeded customer from local state.
+ * In live mode: fetches the customer record linked to the authenticated user's
+ * auth_user_id via `getMyCustomerRecord()`. Returns null if no linked record
+ * exists or if the user is not a customer (pf_is_customer() is false).
+ *
+ * NOT AUTH. There is no sign-in. This function returns a customer record for
+ * display purposes only; authorization is enforced by RLS and the database
+ * function `pf_is_customer()`.
  */
 export function usePortalCustomer(): Customer | null {
-  return usePharmacy((state) => state.customers[0] ?? null);
+  const [customer, setCustomer] = useState<Customer | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const fetchCustomer = useCallback(async () => {
+    if (isDemoMode()) {
+      const demoCustomer = getPharmacyState().customers[0] ?? null;
+      setCustomer(demoCustomer);
+      setLoading(false);
+      return;
+    }
+
+    const result = await getMyCustomerRecord();
+    if (!result.ok || !result.data) {
+      setCustomer(null);
+    } else {
+      // Convert snake_case database row to camelCase domain type
+      const row = result.data;
+      setCustomer({
+        id: row.id,
+        code: row.code,
+        name: row.name,
+        phone: row.phone,
+        email: row.email ?? undefined,
+        walletBalance: row.wallet_balance,
+        outstandingDebt: row.outstanding_debt,
+        totalSpent: row.total_spent,
+        purchaseCount: row.purchase_count,
+        registeredDate: row.registered_date,
+        lastPurchaseDate: row.last_purchase_date ?? undefined,
+        consentForReminders: row.consent_for_reminders,
+        chronicMedications: row.chronic_medications,
+        notes: row.notes ?? undefined,
+      });
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    fetchCustomer();
+  }, [fetchCustomer]);
+
+  return customer;
 }
 
-/* ------------------------------------------------------------- availability */
+/* ---------------------------------------------------------------- availability */
 
 export interface BranchAvailability {
   branch: Branch;

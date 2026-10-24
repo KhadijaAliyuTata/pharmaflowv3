@@ -93,6 +93,7 @@ export type {
 export {
   createCustomer,
   getMyCustomerRecord,
+  isCustomer,
   listCustomers,
   listSuppliers,
 } from './parties';
