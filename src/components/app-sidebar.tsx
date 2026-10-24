@@ -37,7 +37,7 @@ import {
 } from '~/lib/supabase/branch-context';
 import { DEMO_ACCOUNTS, isDemoMode, switchRole, useSession } from '~/lib/session';
 import { signOutSafely } from '~/lib/sign-out';
-import type { Role } from '~/domain/types';
+import type { StaffRole } from '~/domain/types';
 
 export interface AppSidebarProps extends React.ComponentProps<typeof Sidebar> {
   /** Overrides the signed-in name. Only for previews. */
@@ -70,12 +70,12 @@ export function AppSidebar({
   // authorisation and is always assistant, even if the profile cache says
   // otherwise. The store's `currentUser` is what the screens gate on, so this
   // uses the same rule the shell applies.
-  const role: Role = effectiveRole(
+  const role = effectiveRole(
     branch.source,
     roleForBranch(branch.currentBranchId),
     user?.role ?? null,
     'owner',
-  );
+  ) as StaffRole;
   const name = userName ?? user?.name ?? 'Signed out';
   // Compatibility boundary: prefer the branch Supabase resolved, fall back to the
   // prototype's own (localStorage) value. Display only - never a security input.
@@ -85,7 +85,7 @@ export function AppSidebar({
   const onSignOut = () => {
     void signOutSafely().then((result) => {
       if (result.warning) toast.warning(result.warning);
-      void navigate({ to: '/login' });
+      void navigate({ to: '/' });
     });
   };
 
@@ -221,12 +221,14 @@ export function AppSidebar({
                           // Only reachable in demo mode. With Supabase, a role is a row
                           // in `profiles` guarded by RLS, and changing it is an audited
                           // action — `switchRole` throws outside a demo session.
-                          const next: Role = value;
+                          const next: StaffRole = value;
                           switchRole(next);
                           toast.success(`Viewing as ${ROLE_LABEL[next]}`);
                         }}
                       >
-                        {DEMO_ACCOUNTS.map((account) => (
+                        {DEMO_ACCOUNTS.filter((a) =>
+                          a.role === 'owner' || a.role === 'assistant'
+                        ).map((account) => (
                           <DropdownMenuRadioItem key={account.role} value={account.role}>
                             <UserRound />
                             {ROLE_LABEL[account.role]}

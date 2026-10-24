@@ -36,11 +36,13 @@
  */
 
 import type { DBSchema } from 'idb';
+import type { StaffRole } from '~/domain/types';
 
 /** The branch id and user id that name this browser's local database. */
 export interface OfflineIdentity {
   pharmacyId: string;
   userId: string;
+  role?: StaffRole;
 }
 
 /** Which role a cache is allowed to persist for. `owner` is the only privileged one. */

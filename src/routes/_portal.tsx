@@ -47,14 +47,14 @@ export const Route = createFileRoute('/_portal')({
     // Demo mode: only require authentication (existing behavior)
     if (isDemoMode()) {
       if (peekSession().status === 'anonymous') {
-        throw redirect({ to: '/login' });
+        throw redirect({ to: '/' });
       }
       return;
     }
 
     // Live mode: require authentication AND customer role
     if (peekSession().status === 'anonymous') {
-      throw redirect({ to: '/login' });
+      throw redirect({ to: '/' });
     }
   },
   component: PortalShell,
@@ -74,7 +74,7 @@ function PortalShell() {
   //
   // Demo mode: render the portal shell with seeded data.
   if (isDemoMode()) {
-    if (status === 'anonymous') return <Navigate to="/login" replace />;
+    if (status === 'anonymous') return <Navigate to="/" replace />;
     return <PortalDemoShell />;
   }
 
@@ -142,7 +142,7 @@ function PortalDemoShell() {
   // there is nothing to consult the session about. `isDemoMode()` is a build-time
   // constant on both the server and the client, so the first paint agrees.
   if (!isDemoMode()) return <PortalNotInBuild />;
-  if (status === 'anonymous') return <Navigate to="/login" replace />;
+  if (status === 'anonymous') return <Navigate to="/" replace />;
 
   return (
     <div className="flex min-h-dvh flex-col bg-background">

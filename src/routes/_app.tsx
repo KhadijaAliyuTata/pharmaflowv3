@@ -19,6 +19,7 @@ import {
   roleForBranch,
   useActiveBranch,
 } from '~/lib/supabase/branch-context';
+import type { StaffRole } from '~/domain/types';
 
 /**
  * Pathless layout route. Everything under `src/routes/_app/` renders inside
@@ -45,7 +46,7 @@ export const Route = createFileRoute('/_app')({
   // user, and only for the one paint before the effect resolves.
   beforeLoad: () => {
     if (peekSession().status === 'anonymous') {
-      throw redirect({ to: '/login' });
+      throw redirect({ to: '/' });
     }
   },
   component: AppLayout,
@@ -79,7 +80,7 @@ function AppLayout() {
     roleForBranch(branch.currentBranchId),
     user?.role ?? null,
     'owner',
-  );
+  ) as StaffRole;
 
   // ⌘K / Ctrl+K opens the screen palette; "/" opens record search. The hook skips
   // editable targets, so neither hijacks typing inside the POS cart or a form.
@@ -90,7 +91,7 @@ function AppLayout() {
 
   // Below the hooks on purpose: an early return above them is a conditional
   // hook, and React tears the whole route down when the session resolves.
-  if (status === 'anonymous') return <Navigate to="/login" replace />;
+  if (status === 'anonymous') return <Navigate to="/" replace />;
 
   // No tenant, no app.
   //
@@ -138,7 +139,7 @@ function AppLayout() {
                 onClick={() => {
                   void signOutSafely().then((result) => {
                     if (result.warning) toast.warning(result.warning);
-                    void navigate({ to: '/login' });
+                    void navigate({ to: '/' });
                   });
                 }}
               >

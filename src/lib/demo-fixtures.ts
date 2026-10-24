@@ -57,7 +57,7 @@ export const DEMO_USERS: User[] = [
 export interface DemoAccount {
   name: string;
   email: string;
-  role: 'owner' | 'assistant';
+  role: 'owner' | 'assistant' | 'customer' | 'supplier';
   blurb: string;
 }
 
@@ -65,4 +65,6 @@ export interface DemoAccount {
 export const DEMO_ACCOUNTS: DemoAccount[] = [
   { name: 'Khadija Bello', email: 'khadija@pharmaflow.ng', role: 'owner', blurb: 'Pricing, margins, credit, staff' },
   { name: 'Aisha Yusuf', email: 'aisha@pharmaflow.ng', role: 'assistant', blurb: 'Counter only' },
+  { name: 'Grace Adeyemi', email: 'grace@pharmaflow.ng', role: 'customer', blurb: 'Browse medicines, place orders' },
+  { name: 'MedPlus Distributors', email: 'supplier@pharmaflow.ng', role: 'supplier', blurb: 'Manage catalogue, quotes, fulfilment' },
 ];

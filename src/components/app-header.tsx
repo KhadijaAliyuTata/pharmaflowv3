@@ -27,7 +27,7 @@ import { Separator } from '~/components/ui/separator';
 import { SidebarTrigger } from '~/components/ui/sidebar';
 import { Kbd } from '~/components/ui/kbd';
 import { ThemeToggle } from '~/components/theme-toggle';
-import { findNavItem, ROLE_LABEL, type Role } from '~/lib/nav';
+import { findNavItem, ROLE_LABEL, type StaffRole } from '~/lib/nav';
 import { useSession } from '~/lib/session';
 import { signOutSafely } from '~/lib/sign-out';
 import {
@@ -60,7 +60,7 @@ export function AppHeader({
   onOpenSearch,
   onOpenCommand,
 }: {
-  role?: Role;
+  role?: StaffRole;
   /** Opens the record search (medicines, suppliers, staff, customers). */
   onOpenSearch: () => void;
   /** Opens the screen-jump palette (⌘K). */
@@ -82,7 +82,7 @@ export function AppHeader({
   const onSignOut = () => {
     void signOutSafely().then((result) => {
       if (result.warning) toast.warning(result.warning);
-      void navigate({ to: '/login' });
+      void navigate({ to: '/' });
     });
   };
 

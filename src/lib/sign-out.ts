@@ -53,7 +53,7 @@ export async function signOutSafely(): Promise<SignOutResult> {
     };
   }
 
-  const identity = { pharmacyId: branchId, userId: user.id };
+  const identity = { pharmacyId: branchId, userId: user.id, role: user.role };
   let work = null;
   try {
     work = await inspectIdentityWork(identity);

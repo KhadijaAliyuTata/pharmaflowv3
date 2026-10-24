@@ -7,14 +7,16 @@
  * local repo and the POS from disagreeing about that rule.
  */
 
-export type EffectiveRole = 'owner' | 'assistant';
+import type { Role } from '~/domain/types';
+
+export type EffectiveRole = Role;
 
 export function effectiveRole(
   source: 'server' | 'cache',
-  branchRole: EffectiveRole | null,
-  sessionRole: EffectiveRole | null,
-  fallback: EffectiveRole = 'assistant',
-): EffectiveRole {
+  branchRole: Role | null,
+  sessionRole: Role | null,
+  fallback: Role = 'assistant',
+): Role {
   if (source === 'cache') return 'assistant';
   return branchRole ?? sessionRole ?? fallback;
 }

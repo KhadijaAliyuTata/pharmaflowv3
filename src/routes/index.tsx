@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { Link, Navigate, createFileRoute } from '@tanstack/react-router';
+import { Link, Navigate, createFileRoute, useNavigate } from '@tanstack/react-router';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -97,6 +97,47 @@ function Login() {
   );
 }
 
+/* ------------------------------------------------------------- not configured */
+
+/**
+ * Shown when this deployment cannot authenticate at all.
+ *
+ * Deliberately not a sign-in form. If authentication is impossible, a form is a
+ * dead end that looks like a password problem, and the operator has no signal
+ * that the real fault is a missing build variable. Naming the variable is the
+ * whole value of this screen.
+ */
+function NotConfigured({ problem }: { problem: string }) {
+  return (
+    <div className="grid min-h-dvh lg:grid-cols-2">
+      <BrandPanel />
+
+      <main className="flex items-center justify-center p-6">
+        <div className="w-full max-w-sm space-y-4">
+          <div className="space-y-1">
+            <h1 className="text-xl font-semibold tracking-tight">Not configured</h1>
+            <p className="text-sm text-muted-foreground">
+              This build cannot sign anyone in.
+            </p>
+          </div>
+
+          <div className="flex items-start gap-2 rounded-lg border border-warning-border bg-warning-subtle px-3 py-2.5">
+            <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warning" />
+            <p className="text-sm text-warning">{problem}</p>
+          </div>
+
+          <p className="text-xs text-muted-foreground">
+            Seeded demo data is available on a development server via{' '}
+            <code className="font-mono">PUBLIC_DEMO_MODE=true</code>. It is not available in a
+            production build at all: demo mode is decided by the build, so no environment variable
+            can turn it on here.
+          </p>
+        </div>
+      </main>
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------- staff form */
 
 const staffSchema = z.object({
@@ -112,6 +153,7 @@ function StaffSignInForm() {
     resolver: zodResolver(staffSchema),
     defaultValues: { email: '', password: '', remember: true },
   });
+  const navigate = useNavigate();
 
   const onSubmit = async (values: StaffValues) => {
     const result = await signIn(values.email, values.password, {
@@ -125,6 +167,24 @@ function StaffSignInForm() {
 
     toast.success(`Signed in as ${result.user.name}`);
     // The `Navigate` in `Login` takes over now that the session resolved.
+  };
+
+  const handleDemoPick = (account: (typeof DEMO_ACCOUNTS)[number]) => {
+    // Owner and Attendant are staff roles — sign in via the form.
+    if (account.role === 'owner' || account.role === 'assistant') {
+      form.setValue('email', account.email, { shouldValidate: true });
+      form.setValue('password', 'demo', { shouldValidate: true });
+      return;
+    }
+    // Customer and Supplier are portal prototypes — navigate directly.
+    if (account.role === 'customer') {
+      void navigate({ to: '/customer' });
+      return;
+    }
+    if (account.role === 'supplier') {
+      void navigate({ to: '/supplier' });
+      return;
+    }
   };
 
   return (
@@ -189,12 +249,7 @@ function StaffSignInForm() {
             rejected. `isDemoMode()` is `DEMO_ALLOWED && DEMO_MODE`, so this is also
             false in every production build regardless of the flag. */}
         {isDemoMode() && (
-          <DemoAccounts
-            onPick={(account) => {
-              form.setValue('email', account.email, { shouldValidate: true });
-              form.setValue('password', 'demo', { shouldValidate: true });
-            }}
-          />
+          <DemoAccounts onPick={handleDemoPick} />
         )}
 
         {/* One-click investor demo hub — demo mode only; folds away in production. */}

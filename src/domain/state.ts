@@ -8,6 +8,7 @@ import type {
   MedicineRequest,
   ReceiptStatus,
   Role,
+  StaffRole,
   Sale,
   StockMovement,
   StockReceipt,
@@ -78,7 +79,7 @@ export type Action =
   | 'approve_pricing'
   | 'manage_staff';
 
-const ROLE_ACTIONS: Record<Role, Action[]> = {
+const ROLE_ACTIONS: Record<StaffRole, Action[]> = {
   owner: [
     'view_dashboard',
     'sell',
@@ -91,11 +92,11 @@ const ROLE_ACTIONS: Record<Role, Action[]> = {
   assistant: ['view_dashboard', 'sell', 'receive_stock', 'view_reports'],
 };
 
-export function can(role: Role, action: Action): boolean {
+export function can(role: StaffRole, action: Action): boolean {
   return ROLE_ACTIONS[role].includes(action);
 }
 
-export function canApprovePricing(role: Role): boolean {
+export function canApprovePricing(role: StaffRole): boolean {
   return can(role, 'approve_pricing');
 }
 

@@ -28,17 +28,17 @@ import {
  * role lands and the two drift apart. Every consumer that imported it from
  * here still works.
  */
-import type { Role } from '~/domain/types';
+import type { Role, StaffRole } from '~/domain/types';
 import { isDemoMode } from '~/lib/build-mode';
 
-export type { Role };
+export type { Role, StaffRole };
 
 export type NavItem = {
   label: string;
   to: string;
   icon: LucideIcon;
   /** Omit for screens every role can open. */
-  roles?: Role[];
+  roles?: StaffRole[];
   /** Rendered as a count pill in the sidebar and listed first in ⌘K. */
   badge?: number;
   /** Words ⌘K should match beyond the label. */
@@ -225,6 +225,8 @@ export const NAV_SECTIONS: NavSection[] = [
 export const ROLE_LABEL: Record<Role, string> = {
   owner: 'Owner',
   assistant: 'Assistant',
+  customer: 'Customer',
+  supplier: 'Supplier',
 };
 
 /** Icons used by the header, kept beside the nav icons for consistency. */
@@ -233,7 +235,7 @@ export const HEADER_ICONS = {
   sparkles: Sparkles,
 } as const;
 
-export function sectionsForRole(role: Role): NavSection[] {
+export function sectionsForRole(role: StaffRole): NavSection[] {
   // A live build hides the items whose screens are withheld (see `pilotHidden`);
   // demo mode keeps them, because there the screens render. Sections left with no
   // items are dropped so the sidebar does not print a heading over nothing.
@@ -248,7 +250,7 @@ export function sectionsForRole(role: Role): NavSection[] {
 }
 
 /** Flat list for ⌘K, filtered the same way. */
-export function itemsForRole(role: Role): NavItem[] {
+export function itemsForRole(role: StaffRole): NavItem[] {
   return sectionsForRole(role).flatMap((section) => section.items);
 }
 

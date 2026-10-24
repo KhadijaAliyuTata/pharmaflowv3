@@ -9,7 +9,7 @@ import {
   CommandItem,
   CommandList,
 } from '~/components/ui/command';
-import { itemsForRole, type Role } from '~/lib/nav';
+import { itemsForRole, type StaffRole } from '~/lib/nav';
 
 /**
  * ⌘K palette over the installed `command` + `dialog` primitives.
@@ -45,7 +45,7 @@ export function CommandMenu({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  role?: Role;
+  role?: StaffRole;
 }) {
   const navigate = useNavigate();
   const [query, setQuery] = useState('');

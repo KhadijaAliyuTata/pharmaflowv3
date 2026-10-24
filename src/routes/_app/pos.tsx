@@ -70,7 +70,8 @@ import { useMedicines } from '~/hooks/use-medicines';
 import { useCustomers } from '~/hooks/use-customers';
 import { useSales } from '~/hooks/use-sales';
 import { useCurrentUser, usePharmacy, usePharmacyActions } from '~/store/pharmacy';
-import type { CartLine, Medicine, PaymentMethod, Sale, TradeUnit } from '~/domain/types';
+import type { CartLine, Medicine, PaymentMethod, Sale, StaffRole, TradeUnit } from '~/domain/types';
+import type { LocalRole } from '~/offline/db-schema';
 // ---------------------------------------------------------------------------
 // Phase 3 — offline sale safety net for THIS screen only.
 //
@@ -295,7 +296,7 @@ function PointOfSale() {
         activeBranch.source,
         roleForBranch(currentBranchId),
         session.user.role,
-      ),
+      ) as StaffRole,
     };
   }, [live, session.user, currentBranchId, activeBranch]);
   const offlineIdentityKey = offlineIdentity
@@ -400,7 +401,7 @@ function PointOfSale() {
     const identity = offlineIdentity;
     let closed = false;
     let opened: OfflineRepo | null = null;
-    OfflineRepo.open(identity, identity.role)
+    OfflineRepo.open(identity, identity.role as LocalRole)
       .then((repo) => {
         if (closed) {
           repo.close();

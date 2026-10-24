@@ -12,7 +12,10 @@
  *     Never do arithmetic on it inline.
  */
 
-export type Role = 'owner' | 'assistant';
+export type Role = 'owner' | 'assistant' | 'customer' | 'supplier';
+
+/** Staff roles only (for pharmacy staff users). */
+export type StaffRole = 'owner' | 'assistant';
 
 export type UserId = string;
 export type MedicineId = string;
@@ -24,7 +27,7 @@ export interface User {
   id: UserId;
   name: string;
   email: string;
-  role: Role;
+  role: StaffRole;
   phone: string;
   licenseNumber?: string;
   /** Managers approve pricing; assistants can only request it. */
