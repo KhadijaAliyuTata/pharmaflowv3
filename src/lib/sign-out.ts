@@ -31,9 +31,7 @@ export interface SignOutResult {
 
 export async function signOutSafely(): Promise<SignOutResult> {
   if (isDemoMode()) {
-    // Defer signOut to a microtask so the event handler completes first,
-    // preventing the synchronous session change + redirect from freezing the UI.
-    await new Promise<void>((resolve) => queueMicrotask(() => { signOut(); resolve(); }));
+    signOut();
     return { purged: false, retained: false, pending: 0, warning: null };
   }
 

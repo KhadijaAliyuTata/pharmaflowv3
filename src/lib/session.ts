@@ -814,7 +814,15 @@ export function signOut(): void {
   // A demo session never came from Supabase, so "sign out" must not sign out of
   // Supabase: a tester signed into a real account in a dev browser would lose
   // their real session to a demo's exit button. Demo exit restores instead.
-  if (isDemoMode() && readDemoRoleKey()) {
+  //
+  // In demo mode, we always use exitDemoSession (which clears cache and emits
+  // anonymous) regardless of whether a demo role key was set. The demo role key
+  // is only set when entering via the /demo page; signing in via the login form
+  // with a demo account does not set it. Without this, logout would fall through
+  // to the non-demo path which tries to call getSupabase().auth.signOut() and
+  // emits anonymous directly, causing a synchronous redirect during render that
+  // freezes the UI.
+  if (isDemoMode()) {
     exitDemoSession();
     return;
   }

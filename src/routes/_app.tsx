@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Navigate, Outlet, createFileRoute, redirect, useLocation, useNavigate } from '@tanstack/react-router';
 import { AppHeader } from '~/components/app-header';
 import { AppSidebar } from '~/components/app-sidebar';
@@ -89,9 +89,18 @@ function AppLayout() {
     '/': () => setSearchOpen(true),
   });
 
+  // Redirect to login when session becomes anonymous. Use useEffect so the
+  // navigation happens after the render is committed, not during render.
+  // This avoids throwing a redirect exception during render, which can freeze
+  // the UI when the session change originates from a microtask (e.g., logout click).
+  useEffect(() => {
+    if (status === 'anonymous') {
+      void navigate({ to: '/', replace: true });
+    }
+  }, [status, navigate]);
+
   // Below the hooks on purpose: an early return above them is a conditional
   // hook, and React tears the whole route down when the session resolves.
-  if (status === 'anonymous') return <Navigate to="/" replace />;
 
   // No tenant, no app.
   //
