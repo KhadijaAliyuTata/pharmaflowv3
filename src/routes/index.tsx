@@ -260,6 +260,15 @@ function StaffSignInForm() {
             </Link>
           </p>
         )}
+
+        {/* Investor demo entry point — demo mode only; folds away in production. */}
+        {isDemoMode() && (
+          <p className="text-center text-sm mt-2">
+            <Link to="/investor-demo" className="font-semibold text-[#064276] hover:underline">
+              Explore Investor Demo (no password) →
+            </Link>
+          </p>
+        )}
       </form>
     </Form>
   );
