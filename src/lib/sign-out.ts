@@ -31,8 +31,10 @@ export interface SignOutResult {
 
 export async function signOutSafely(): Promise<SignOutResult> {
   if (isDemoMode()) {
-    signOut();
-    return Promise.resolve({ purged: false, retained: false, pending: 0, warning: null });
+    // Defer signOut to a microtask so the event handler completes first,
+    // preventing the synchronous session change + redirect from freezing the UI.
+    await new Promise<void>((resolve) => queueMicrotask(() => { signOut(); resolve(); }));
+    return { purged: false, retained: false, pending: 0, warning: null };
   }
 
   const user = peekSession().user;
