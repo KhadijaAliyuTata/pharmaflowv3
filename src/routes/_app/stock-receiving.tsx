@@ -25,6 +25,13 @@ import {
 } from '~/components/ui/table';
 import { Money, PageHeader, SectionTitle, StatTile } from '~/components/app/primitives';
 import { formatCount, formatWhen, isoDate, money, multiply, sum } from '~/domain/money';
+import {
+  QUANTITY_PROBLEM,
+  nextQuantity,
+  normaliseQuantityTyping,
+  parseQuantityText,
+  type QuantityProblem,
+} from '~/domain/quantity-input';
 import { findBaseUnit, findUnit } from '~/domain/units';
 import { useIsOwner } from '~/hooks/use-is-owner';
 import { useMedicines } from '~/hooks/use-medicines';
@@ -132,6 +139,8 @@ function StockReceiving() {
   const [supplierId, setSupplierId] = useState('');
   const [batchNumber, setBatchNumber] = useState('');
   const [quantity, setQuantity] = useState('');
+  /** Set when the field holds something that cannot be received. Cleared on a valid edit. */
+  const [quantityProblem, setQuantityProblem] = useState<QuantityProblem | null>(null);
   /** The idempotency key for the delivery being entered. See `newReceiptNumber`. */
   const [receiptNumber, setReceiptNumber] = useState(() => newReceiptNumber());
   const [submitting, setSubmitting] = useState(false);
@@ -152,7 +161,16 @@ function StockReceiving() {
   const medicine = medicines.find((m) => m.id === medicineId);
   const cost = money(Number(costInput) || 0);
   const price = money(Number(priceInput) || 0);
-  const units = money(Number(quantity) || 0);
+  /**
+   * The count as a number for the preview only.
+   *
+   * `0` is a placeholder, never a submission: `submit` re-parses the field and
+   * refuses to book anything when it is empty, zero, fractional or too large.
+   * Parsing here (rather than `Number(quantity) || 0`) is what keeps `1.999`
+   * from being rounded to `2` on its way to the ledger.
+   */
+  const parsedQuantity = parseQuantityText(quantity);
+  const units = parsedQuantity.ok ? parsedQuantity.value : 0;
 
   const baseUnit = medicine ? findBaseUnit(medicine.units) : null;
   const receiveUnit = medicine
@@ -206,11 +224,38 @@ function StockReceiving() {
     if (submitting) return;
     setError(null);
 
+    /**
+     * The screen's own check, before either write path.
+     *
+     * The database function and `receiveStock` both refuse a bad count, but by
+     * then the message is generic and the live path would send `0` base units.
+     * Deciding here is what lets the field explain itself — and it means an
+     * empty or zero quantity never reaches a mutation at all.
+     */
+    if (!medicine) {
+      setError('Choose the product that arrived.');
+      return;
+    }
+    if (!receiveUnit) {
+      // Without a counted unit the live path would send zero base units. Refuse
+      // here instead of booking an empty delivery against the product.
+      setError('Choose the unit the delivery was counted in.');
+      return;
+    }
+
+    const parsed = parseQuantityText(quantity);
+    if (!parsed.ok) {
+      setQuantityProblem(parsed.reason);
+      return;
+    }
+    setQuantityProblem(null);
+    const receivedQuantity = parsed.value;
+
     if (!live) {
       const result = receiveStock({
         medicineId,
         batchNumber,
-        quantity: units,
+        quantity: receivedQuantity,
         unitKey: receiveUnit?.key ?? '',
         supplierId,
         expiryDate,
@@ -226,6 +271,7 @@ function StockReceiving() {
       const receipt = result.value;
       setBatchNumber('');
       setQuantity('');
+      setQuantityProblem(null);
 
       if (receipt.status === 'pending_pricing') {
         toast('Sent for owner approval', {
@@ -252,9 +298,9 @@ function StockReceiving() {
         ...(canPrice && priceInput ? { pricePerBaseUnit: price } : {}),
         // The counted unit, snapshotted. Only when the count is a whole number in
         // that unit — the column is an integer and the note says "5 boxes".
-        ...(receiveUnit && Number.isInteger(units) && units > 0
+        ...(receiveUnit && Number.isInteger(receivedQuantity) && receivedQuantity > 0
           ? {
-              receivedQuantity: units,
+              receivedQuantity,
               receivedUnitKey: receiveUnit.key,
               receivedUnitName: receiveUnit.name,
               receivedUnitMultiplier: receiveUnit.multiplier,
@@ -270,6 +316,7 @@ function StockReceiving() {
       const saved = result.data;
       setBatchNumber('');
       setQuantity('');
+      setQuantityProblem(null);
       // A new number for the next delivery. The one just used stays the key for a
       // retry of *this* attempt, which is the whole point of holding it in state.
       setReceiptNumber(newReceiptNumber());
@@ -411,39 +458,55 @@ function StockReceiving() {
                         type="button"
                         variant="outline"
                         size="icon"
-                        className="size-10"
-                        onClick={() =>
-                          setQuantity(
-                            String(Math.max(0, units - (receiveUnit?.multiplier ?? 1))),
-                          )
-                        }
+                        className="size-10 shrink-0"
+                        onClick={() => setQuantity(nextQuantity(quantity, -1))}
                         aria-label="Decrease quantity"
                       >
                         <Minus />
                       </Button>
+                      {/* A text field with a numeric keypad, not `type="number"`:
+                          see `~/domain/quantity-input` for why the native number
+                          input made this field unreliable to type into. */}
                       <Input
                         id="recv-qty"
-                        type="number"
+                        type="text"
                         inputMode="numeric"
-                        min={0}
-                        step={1}
+                        autoComplete="off"
+                        pattern="[0-9]*"
+                        placeholder="0"
                         className="h-10 text-center"
                         value={quantity}
-                        onChange={(event) => setQuantity(event.target.value)}
+                        aria-invalid={quantityProblem ? true : undefined}
+                        aria-describedby={quantityProblem ? 'recv-qty-problem' : undefined}
+                        onChange={(event) => {
+                          const next = normaliseQuantityTyping(event.target.value);
+                          if (next === null) {
+                            // Keep the previous value and say why. Stripping the
+                            // character instead would turn "1.5" into "15".
+                            setQuantityProblem('not-whole');
+                            return;
+                          }
+                          setQuantity(next);
+                          if (quantityProblem) setQuantityProblem(null);
+                        }}
                       />
                       <Button
                         type="button"
                         variant="outline"
                         size="icon"
-                        className="size-10"
-                        onClick={() =>
-                          setQuantity(String(units + (receiveUnit?.multiplier ?? 1)))
-                        }
+                        className="size-10 shrink-0"
+                        // One press is one counted unit, not one multiplier.
+                        onClick={() => setQuantity(nextQuantity(quantity, 1))}
                         aria-label="Increase quantity"
                       >
                         <Plus />
                       </Button>
                     </div>
+                    {quantityProblem && (
+                      <p id="recv-qty-problem" role="alert" className="text-sm text-destructive">
+                        {QUANTITY_PROBLEM[quantityProblem]}
+                      </p>
+                    )}
                     {/* The conversion is shown as it happens. An attendant
                         keying in "5" must be able to see that this means 500
                         before they commit, not discover it on the batch. */}

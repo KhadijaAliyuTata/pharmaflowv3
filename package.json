@@ -14,7 +14,8 @@
     "verify:db": "bun run supabase/verify/run-all.mjs",
     "verify:medicine-ui": "bun scripts/verify-medicine-ui.mjs",
     "verify:returns-price-ui": "bun scripts/verify-returns-price-ui.mjs",
-    "check": "bun run typecheck && bun run verify:medicine-ui && bun run verify:returns-price-ui && bun run build"
+    "verify:stock-receiving-ui": "bun scripts/verify-stock-receiving-ui.mjs",
+    "check": "bun run typecheck && bun run verify:medicine-ui && bun run verify:returns-price-ui && bun run verify:stock-receiving-ui && bun run build"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",
