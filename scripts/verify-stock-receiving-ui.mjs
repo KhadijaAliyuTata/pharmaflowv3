@@ -16,6 +16,7 @@
  */
 
 import {
+  QUANTITY_PRESETS,
   QUANTITY_PROBLEM,
   nextQuantity,
   normaliseQuantityTyping,
@@ -118,6 +119,30 @@ for (const reason of ['empty', 'not-whole', 'zero', 'too-large']) {
     `the ${reason} problem has a sentence for the attendant`,
   );
 }
+
+/* ---------------------------------------------------------- dropdown presets */
+
+check(QUANTITY_PRESETS.length >= 5, 'the dropdown offers several common quantities');
+check(
+  QUANTITY_PRESETS.every((preset) => Number.isSafeInteger(preset) && preset > 0),
+  'every preset is a positive whole count',
+);
+check(
+  QUANTITY_PRESETS.every((preset, index) => index === 0 || preset > QUANTITY_PRESETS[index - 1]),
+  'the presets are unique and ascending',
+);
+check(
+  QUANTITY_PRESETS.every((preset) => parseQuantityText(String(preset)).ok),
+  'every preset passes the same parser the typed field uses',
+);
+check(
+  QUANTITY_PRESETS.includes(1) && QUANTITY_PRESETS.includes(10),
+  'the presets cover a single unit and a typical delivery',
+);
+check(
+  QUANTITY_PRESETS.every((preset) => normaliseQuantityTyping(String(preset)) === String(preset)),
+  'selecting a preset writes a display value the field accepts unchanged',
+);
 
 /* -------------------------------------------------------- the write itself */
 

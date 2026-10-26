@@ -1,11 +1,27 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Link, createFileRoute, useNavigate } from '@tanstack/react-router';
-import { ArrowRight, Minus, PackagePlus, Plus, ScanLine, TriangleAlert } from 'lucide-react';
+import {
+  ArrowRight,
+  ChevronDown,
+  Minus,
+  PackagePlus,
+  Plus,
+  ScanLine,
+  TriangleAlert,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
 import { BarcodeScanner } from '~/components/barcode-scanner';
 import { Card, CardContent, CardHeader, CardTitle } from '~/components/ui/card';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from '~/components/ui/dropdown-menu';
 import { Field, FieldGroup, FieldLabel } from '~/components/ui/field';
 import { Input } from '~/components/ui/input';
 import {
@@ -26,6 +42,7 @@ import {
 import { Money, PageHeader, SectionTitle, StatTile } from '~/components/app/primitives';
 import { formatCount, formatWhen, isoDate, money, multiply, sum } from '~/domain/money';
 import {
+  QUANTITY_PRESETS,
   QUANTITY_PROBLEM,
   nextQuantity,
   normaliseQuantityTyping,
@@ -139,6 +156,10 @@ function StockReceiving() {
   const [supplierId, setSupplierId] = useState('');
   const [batchNumber, setBatchNumber] = useState('');
   const [quantity, setQuantity] = useState('');
+  /** Focus returns here after a dropdown preset so the field stays the editor. */
+  const quantityInputRef = useRef<HTMLInputElement>(null);
+  /** Set only when a preset was chosen, so closing the menu elsewhere does not steal focus. */
+  const focusQuantityAfterMenu = useRef(false);
   /** Set when the field holds something that cannot be received. Cleared on a valid edit. */
   const [quantityProblem, setQuantityProblem] = useState<QuantityProblem | null>(null);
   /** The idempotency key for the delivery being entered. See `newReceiptNumber`. */
@@ -205,6 +226,30 @@ function StockReceiving() {
     setMedicineId(match.id);
     setError(null);
     toast.success(`${match.name} selected`, { description: `${match.strength} · ${code}` });
+  };
+
+  /**
+   * Apply a dropdown preset to the same editable field.
+   *
+   * This is deliberately only `setQuantity`: the dropdown is a shortcut for
+   * typing, not a separate control, so the value goes through the same state,
+   * the same parser and the same submit check. Focus (and the selection) come
+   * back to the input afterwards so the attendant can adjust the preset.
+   */
+  const chooseQuantity = (preset: number) => {
+    setQuantity(String(preset));
+    setQuantityProblem(null);
+    focusQuantityAfterMenu.current = true;
+    // Base UI returns focus to the trigger when the menu's exit animation
+    // finishes. That callback is animation-dependent (and does not run when the
+    // tab is in the background), so return focus on the next tick as well;
+    // `onOpenChangeComplete` repeats it if the close completes later.
+    window.setTimeout(() => {
+      if (focusQuantityAfterMenu.current) {
+        quantityInputRef.current?.focus();
+        quantityInputRef.current?.select();
+      }
+    }, 60);
   };
 
   /**
@@ -468,6 +513,7 @@ function StockReceiving() {
                           see `~/domain/quantity-input` for why the native number
                           input made this field unreliable to type into. */}
                       <Input
+                        ref={quantityInputRef}
                         id="recv-qty"
                         type="text"
                         inputMode="numeric"
@@ -501,6 +547,59 @@ function StockReceiving() {
                       >
                         <Plus />
                       </Button>
+                      {/* A shortcut, not a replacement for typing. Choosing an
+                          item writes into the same controlled field above, so
+                          the value, validation and submit path are identical. */}
+                      <DropdownMenu
+                        onOpenChangeComplete={(open) => {
+                          if (!open && focusQuantityAfterMenu.current) {
+                            focusQuantityAfterMenu.current = false;
+                            quantityInputRef.current?.focus();
+                            quantityInputRef.current?.select();
+                          }
+                        }}
+                      >
+                        <DropdownMenuTrigger
+                          render={
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="icon"
+                              className="size-10 shrink-0"
+                              aria-label="Choose a common quantity"
+                              title="Choose a common quantity"
+                            />
+                          }
+                        >
+                          <ChevronDown />
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" sideOffset={6} className="min-w-56">
+                          <DropdownMenuGroup>
+                            <DropdownMenuLabel>Common quantities</DropdownMenuLabel>
+                            {QUANTITY_PRESETS.map((preset) => (
+                              <DropdownMenuItem
+                                key={preset}
+                                onClick={() => chooseQuantity(preset)}
+                                className="justify-between gap-4"
+                              >
+                                <span>
+                                  {formatCount(preset)}
+                                  {receiveUnit ? ` × ${receiveUnit.name}` : ''}
+                                </span>
+                                {receiveUnit && baseUnit && receiveUnit.multiplier !== 1 && (
+                                  <span
+                                    className="text-xs whitespace-nowrap text-muted-foreground"
+                                    data-numeric
+                                  >
+                                    = {formatCount(multiply(receiveUnit.multiplier, preset))} ×{' '}
+                                    {baseUnit.name}
+                                  </span>
+                                )}
+                              </DropdownMenuItem>
+                            ))}
+                          </DropdownMenuGroup>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </div>
                     {quantityProblem && (
                       <p id="recv-qty-problem" role="alert" className="text-sm text-destructive">

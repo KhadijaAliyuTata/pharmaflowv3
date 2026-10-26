@@ -57,6 +57,21 @@ Smoke tests, all confirmed passing:
 
 Note: dev runs on **5173**, not 3000. v2's Express server may still hold 3000.
 
+### Previewing a build
+
+`vite preview` reads the Worker and its asset manifest **once, at startup**. If
+`dist/` is rebuilt while a preview is running, the in-memory manifest points at
+hashed chunks that the build just deleted, and the browser reports
+`Failed to fetch dynamically imported module`. These scripts build first, so the
+preview can never start on an out-of-date manifest:
+
+```bash
+bun run preview:demo -- --port 4192   # demo build, then preview
+bun run preview -- --port 4192        # production build, then preview
+```
+
+Restart the preview after any separate `bun run build` or `bun run build:demo`.
+
 ## API notes
 
 Version-pinned facts that differ from older TanStack Start / shadcn docs, and

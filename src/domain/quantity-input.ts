@@ -92,6 +92,16 @@ export function parseQuantityText(raw: string): QuantityParse {
 }
 
 /**
+ * Counts offered by the dropdown beside the quantity field.
+ *
+ * These are *counted* units, not base units: the menu shows what each preset
+ * means for the selected packaging (five boxes of 100 is 500 tablets). They are
+ * shortcuts for common delivery sizes, not a closed list — the field stays a
+ * normal editable input and any whole count can still be typed.
+ */
+export const QUANTITY_PRESETS = [1, 2, 5, 10, 20, 50, 100] as const;
+
+/**
  * The `+` / `−` buttons, in the unit the delivery was **counted in**.
  *
  * One press is one counted unit — one box on a note that says "5 boxes", not
