@@ -497,8 +497,22 @@ function StockReceiving() {
                   </Field>
 
                   <Field>
+                    <FieldLabel htmlFor="recv-expiry">Expiry</FieldLabel>
+                    <Input
+                      id="recv-expiry"
+                      type="date"
+                      className="h-10"
+                      value={expiryDate}
+                      onChange={(event) => setExpiryDate(event.target.value)}
+                    />
+                  </Field>
+
+                  {/* Full width: the quantity row also contains three 40px controls,
+                      so in a half-column it collapsed the input to a text-less
+                      sliver on wide screens. */}
+                  <Field className="sm:col-span-2">
                     <FieldLabel htmlFor="recv-qty">Quantity</FieldLabel>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <Button
                         type="button"
                         variant="outline"
@@ -520,7 +534,7 @@ function StockReceiving() {
                         autoComplete="off"
                         pattern="[0-9]*"
                         placeholder="0"
-                        className="h-10 text-center"
+                        className="h-10 min-w-24 flex-1 basis-24 text-center"
                         value={quantity}
                         aria-invalid={quantityProblem ? true : undefined}
                         aria-describedby={quantityProblem ? 'recv-qty-problem' : undefined}
@@ -628,17 +642,6 @@ function StockReceiving() {
                         {baseUnit ? ` × ${baseUnit.name} on hand` : ' base units on hand'}
                       </p>
                     )}
-                  </Field>
-
-                  <Field>
-                    <FieldLabel htmlFor="recv-expiry">Expiry</FieldLabel>
-                    <Input
-                      id="recv-expiry"
-                      type="date"
-                      className="h-10"
-                      value={expiryDate}
-                      onChange={(event) => setExpiryDate(event.target.value)}
-                    />
                   </Field>
                 </div>
 

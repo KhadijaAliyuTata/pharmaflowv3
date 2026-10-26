@@ -15,6 +15,7 @@
  * type-only imports, so no build step, network or Supabase project is involved.
  */
 
+import { readFileSync } from 'node:fs';
 import {
   QUANTITY_PRESETS,
   QUANTITY_PROBLEM,
@@ -24,6 +25,14 @@ import {
 } from '../src/domain/quantity-input.ts';
 import { receiveStock } from '../src/domain/operations.ts';
 import { createSeedState } from '../src/domain/seed.ts';
+
+// The field's state logic can be perfect and still look broken if its flex row
+// squeezes the input to a text-less sliver on a wide screen. Keep a guard for
+// the layout fix here too, because the domain checks below cannot see CSS.
+const routeSource = readFileSync(
+  new URL('../src/routes/_app/stock-receiving.tsx', import.meta.url),
+  'utf8'
+);
 
 let failed = 0;
 let passed = 0;
@@ -37,6 +46,17 @@ function check(ok, label, detail = '') {
 console.log('');
 console.log('  Stock Receiving quantity field (offline)');
 console.log('  ' + '='.repeat(58));
+
+/* ------------------------------------------------------------ layout guards */
+
+check(
+  /<Field className="sm:col-span-2">\s*<FieldLabel htmlFor="recv-qty">/.test(routeSource),
+  'the quantity field spans the full form width instead of a half-column'
+);
+check(
+  /id="recv-qty"[\s\S]{0,500}?className="[^"]*\bmin-w-24\b[^"]*"/.test(routeSource),
+  'the quantity input cannot collapse below a usable width'
+);
 
 /* ------------------------------------------------------------ what is typed */
 
