@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { Link, Navigate, createFileRoute, useNavigate } from '@tanstack/react-router';
+import { Navigate, createFileRoute, useNavigate } from '@tanstack/react-router';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -31,14 +31,26 @@ import {
 import { Input } from '~/components/ui/input';
 import { Skeleton } from '~/components/ui/skeleton';
 import { Toaster } from '~/components/ui/sonner';
-import { DEMO_ACCOUNTS, configProblem, isDemoMode, signIn, useSession } from '~/lib/session';
+import {
+  DEMO_ACCOUNTS,
+  configProblem,
+  enterDemoSession,
+  isDemoMode,
+  signIn,
+  useSession,
+} from '~/lib/session';
 
 /**
  * Sign in.
  *
+ * Live builds use the staff email/password form. Demo builds have no password
+ * to check, so they show the four seeded accounts instead and enter through
+ * `enterDemoSession`; putting a real form beside accounts that accept any
+ * password taught the wrong thing about the deployment.
+ *
  * The customer tab is gone. It was a real form wired to a refusal — v3 has no
  * customer credential to check — and a tab that cannot succeed is a dead end,
- * not an explanation. Staff sign-in is the way in, so it is the only form here.
+ * not an explanation.
  *
  * v2 had four modes in one 802-line `LoginScreen.tsx` — staff, customer, customer
  * register, and a hand-rolled forgot-password modal built from a plain `div`
@@ -51,7 +63,7 @@ export const Route = createFileRoute('/')({
 });
 
 function Login() {
-  const { status } = useSession();
+  const { status, user } = useSession();
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => setMounted(true), []);
@@ -65,7 +77,9 @@ function Login() {
   // instead of a form nobody may use, and anyone signed in is replaced by a
   // redirect. The effect that resolves the session runs in the same commit as
   // this one, so a signed-in user does not normally see either.
-  if (status === 'authenticated') return <Navigate to="/dashboard" />;
+  if (status === 'authenticated') {
+    return <Navigate to={user?.role === 'assistant' ? '/pos' : '/dashboard'} />;
+  }
   if (status === 'loading' && mounted) return <LoginSkeleton />;
 
   // A deployment that cannot authenticate at all gets a diagnosis instead of a
@@ -75,20 +89,26 @@ function Login() {
   const problem = configProblem();
   if (problem) return <NotConfigured problem={problem} />;
 
+  const demoMode = isDemoMode();
+
   return (
     <div className="grid min-h-dvh lg:grid-cols-2">
-      <BrandPanel />
+      <BrandPanel demo={demoMode} />
 
       <main className="flex items-center justify-center p-6">
-        <div className="w-full max-w-sm space-y-6">
-          <div className="space-y-5">
-            <BrandLogo tagline />
+        {demoMode ? (
+          <DemoSignIn />
+        ) : (
+          <div className="w-full max-w-sm space-y-6">
+            <div className="space-y-5">
+              <BrandLogo tagline />
 
-            <h1 className="text-xl font-semibold tracking-tight">Sign in</h1>
+              <h1 className="text-xl font-semibold tracking-tight">Sign in</h1>
+            </div>
+
+            <StaffSignInForm />
           </div>
-
-          <StaffSignInForm />
-        </div>
+        )}
       </main>
 
       {/* Outside `_app`, so this screen owns its own toaster. */}
@@ -153,7 +173,6 @@ function StaffSignInForm() {
     resolver: zodResolver(staffSchema),
     defaultValues: { email: '', password: '', remember: true },
   });
-  const navigate = useNavigate();
 
   const onSubmit = async (values: StaffValues) => {
     const result = await signIn(values.email, values.password, {
@@ -167,24 +186,6 @@ function StaffSignInForm() {
 
     toast.success(`Signed in as ${result.user.name}`);
     // The `Navigate` in `Login` takes over now that the session resolved.
-  };
-
-  const handleDemoPick = (account: (typeof DEMO_ACCOUNTS)[number]) => {
-    // Owner and Attendant are staff roles — sign in via the form.
-    if (account.role === 'owner' || account.role === 'assistant') {
-      form.setValue('email', account.email, { shouldValidate: true });
-      form.setValue('password', 'demo', { shouldValidate: true });
-      return;
-    }
-    // Customer and Supplier are portal prototypes — navigate directly.
-    if (account.role === 'customer') {
-      void navigate({ to: '/customer' });
-      return;
-    }
-    if (account.role === 'supplier') {
-      void navigate({ to: '/supplier' });
-      return;
-    }
   };
 
   return (
@@ -241,36 +242,59 @@ function StaffSignInForm() {
           </Button>
           <ForgotPassword />
         </div>
-
-        {/* Seeded accounts and the "any password" hint describe a sign-in that only
-            exists when the demo session is actually available. Showing them on a live
-            Supabase deployment tells a real user that any password is accepted, which
-            it is not: `signIn` goes to Supabase here and the password is simply
-            rejected. `isDemoMode()` is `DEMO_ALLOWED && DEMO_MODE`, so this is also
-            false in every production build regardless of the flag. */}
-        {isDemoMode() && (
-          <DemoAccounts onPick={handleDemoPick} />
-        )}
-
-        {/* One-click investor demo hub — demo mode only; folds away in production. */}
-        {isDemoMode() && (
-          <p className="text-center text-sm">
-            <Link to="/demo" className="font-semibold text-primary hover:underline">
-              Explore the PharmaFlow demo (no password) →
-            </Link>
-          </p>
-        )}
-
-        {/* Investor demo entry point — demo mode only; folds away in production. */}
-        {isDemoMode() && (
-          <p className="text-center text-sm mt-2">
-            <Link to="/investor-demo" className="font-semibold text-[#064276] hover:underline">
-              Explore Investor Demo (no password) →
-            </Link>
-          </p>
-        )}
       </form>
     </Form>
+  );
+}
+
+/* ---------------------------------------------------------- demo accounts */
+
+/**
+ * Demo builds show the four seeded accounts instead of a password form.
+ *
+ * Owner and attendant enter the real demo shell; customer and supplier open
+ * their prototype portals. Nothing here calls Supabase or writes the real
+ * profile cache — `enterDemoSession` is the same demo-only path used by
+ * `/investor-demo`.
+ */
+function DemoSignIn() {
+  const navigate = useNavigate();
+
+  const enter = (account: (typeof DEMO_ACCOUNTS)[number]) => {
+    if (account.role === 'owner' || account.role === 'assistant') {
+      enterDemoSession(account.role);
+      void navigate({ to: account.role === 'owner' ? '/dashboard' : '/pos' });
+      return;
+    }
+    if (account.role === 'customer') {
+      void navigate({ to: '/customer' });
+      return;
+    }
+    if (account.role === 'supplier') {
+      void navigate({ to: '/supplier' });
+    }
+  };
+
+  return (
+    <div className="w-full max-w-md space-y-6">
+      <div className="space-y-5">
+        <BrandLogo tagline />
+
+        <div className="space-y-2">
+          <h1 className="text-xl font-semibold tracking-tight">Explore PharmaFlow</h1>
+          <p className="text-sm text-muted-foreground">
+            Pick a demo account. No password, no setup.
+          </p>
+        </div>
+      </div>
+
+      {isDemoMode() ? <DemoAccounts onPick={enter} /> : null}
+
+      <p className="text-xs text-muted-foreground">
+        Sample data only. Accounts live in this browser and nothing is sent to a live
+        pharmacy.
+      </p>
+    </div>
   );
 }
 
@@ -285,9 +309,9 @@ function DemoAccounts({ onPick }: { onPick: (account: (typeof DEMO_ACCOUNTS)[num
   return (
     <div className="space-y-2 rounded-lg border border-dashed p-3">
       <div className="flex items-center gap-1.5">
-        <Badge variant="secondary">Demo</Badge>
+        <Badge variant="secondary">Demo accounts</Badge>
         <p className="text-xs text-muted-foreground">
-          Any password works. Accounts live in this browser only.
+          One click. No password.
         </p>
       </div>
 
@@ -305,7 +329,7 @@ function DemoAccounts({ onPick }: { onPick: (account: (typeof DEMO_ACCOUNTS)[num
                   {account.role} · {account.blurb}
                 </p>
               </div>
-              <span className="shrink-0 text-xs text-muted-foreground">Fill</span>
+              <span className="shrink-0 text-xs text-muted-foreground">Enter</span>
             </button>
           </li>
         ))}
@@ -356,24 +380,37 @@ function ForgotPassword() {
 /* ----------------------------------------------------------- brand panel */
 
 /** `hidden` below `lg`, where the card is the whole screen. */
-function BrandPanel() {
+function BrandPanel({ demo = false }: { demo?: boolean }) {
   return (
     <aside className="hidden flex-col justify-between bg-sidebar p-10 text-sidebar-foreground lg:flex">
       <BrandLogo />
 
       <div className="space-y-6">
         <h2 className="text-2xl font-semibold tracking-tight">
-          One till. Every screen.
+          {demo ? 'One pharmacy. Four views.' : 'One till. Every screen.'}
         </h2>
         <ul className="space-y-3 text-sm">
-          <Feature>Sell in boxes, cards or tablets</Feature>
-          <Feature>Pricing and margin stay with the owner</Feature>
-          <Feature>Expiry and reorder before they bite</Feature>
+          {demo ? (
+            <>
+              <Feature>Owner: margins, stock and staff</Feature>
+              <Feature>Attendant: the counter, with limits</Feature>
+              <Feature>Customer: browse and place a sample order</Feature>
+              <Feature>Supplier: quotes and fulfilment</Feature>
+            </>
+          ) : (
+            <>
+              <Feature>Sell in boxes, cards or tablets</Feature>
+              <Feature>Pricing and margin stay with the owner</Feature>
+              <Feature>Expiry and reorder before they bite</Feature>
+            </>
+          )}
         </ul>
       </div>
 
       <p className="text-xs text-muted-foreground">
-        Demo build · data is stored in this browser
+        {demo
+          ? 'Demo build · sample data stays in this browser'
+          : 'PharmaFlow · pharmacy operations'}
       </p>
     </aside>
   );

@@ -1,5 +1,5 @@
 import { Link, useNavigate } from '@tanstack/react-router';
-import { ArrowLeft, LogOut, Plus, ShieldCheck, UserRound } from 'lucide-react';
+import { LogOut, Plus, ShieldCheck, UserRound } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
@@ -254,21 +254,6 @@ export function AppSidebar({
                 <LogOut className="size-4" />
               </Button>
             </div>
-          </SidebarMenuItem>
-        </SidebarMenu>
-
-        {/* A way out of the product and back to the public site. Without it the
-            demo dashboards were a dead end once entered. */}
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              tooltip="PharmaFlow website"
-              className="text-muted-foreground"
-              render={<Link to="/" />}
-            >
-              <ArrowLeft />
-              <span>PharmaFlow website</span>
-            </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
 
