@@ -1,9 +1,11 @@
 /**
- * Offline checks for the Stock Receiving quantity control.
+ * Offline checks for the Stock Receiving product picker and quantity control.
  *
- * These cover the two things the screen got wrong, and nothing that needs a
- * browser or a database:
+ * These cover the things the screen got wrong, and nothing that needs a browser
+ * or a database:
  *
+ *   * what the product search matches, and that the picker is a searchable
+ *     combobox rather than a dropdown-only select;
  *   * what the quantity field accepts and rejects as it is typed, including
  *     clearing it, replacing it, grouping separators and non-numeric edits;
  *   * what a confirmed receipt does to stock — the quantity increases by the
@@ -16,6 +18,7 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { matchesMedicineQuery, medicineLabel } from '../src/domain/medicine-search.ts';
 import {
   QUANTITY_PRESETS,
   QUANTITY_PROBLEM,
@@ -33,6 +36,10 @@ const routeSource = readFileSync(
   new URL('../src/routes/_app/stock-receiving.tsx', import.meta.url),
   'utf8'
 );
+const productControlSource = routeSource.slice(
+  routeSource.indexOf('htmlFor="recv-medicine"'),
+  routeSource.indexOf('htmlFor="recv-batch"')
+);
 
 let failed = 0;
 let passed = 0;
@@ -44,8 +51,71 @@ function check(ok, label, detail = '') {
 }
 
 console.log('');
-console.log('  Stock Receiving quantity field (offline)');
+console.log('  Stock Receiving product picker and quantity field (offline)');
 console.log('  ' + '='.repeat(58));
+
+/* ------------------------------------------------------- product search */
+
+const catalog = createSeedState().medicines;
+const paracetamol = catalog.find((medicine) => medicine.id === 'med-paracetamol');
+const amoxicillin = catalog.find((medicine) => medicine.id === 'med-amoxicillin');
+
+check(paracetamol != null && amoxicillin != null, 'the seeded catalogue has both test products');
+check(
+  paracetamol != null && matchesMedicineQuery(paracetamol, 'Paracetamol'),
+  'typing the product name matches its catalogue entry',
+);
+check(
+  paracetamol != null && matchesMedicineQuery(paracetamol, '  paracetamol  '),
+  'the search ignores case and surrounding space',
+);
+check(
+  paracetamol != null && matchesMedicineQuery(paracetamol, '500mg'),
+  'typing the strength narrows the product list',
+);
+check(
+  paracetamol != null && matchesMedicineQuery(paracetamol, '8901030365012'),
+  'typing the barcode matches the product',
+);
+check(
+  paracetamol != null && !matchesMedicineQuery(paracetamol, 'Amoxicillin'),
+  'a different product name does not match',
+);
+check(
+  paracetamol != null && matchesMedicineQuery(paracetamol, ''),
+  'an empty query keeps the catalogue available to browse',
+);
+check(
+  paracetamol != null && medicineLabel(paracetamol) === 'Paracetamol Tablets · 500mg',
+  'the selected label keeps the name and strength together',
+);
+
+/* ------------------------------------------------------ product control */
+
+check(/<Combobox\b/.test(productControlSource), 'the product field is a combobox');
+check(
+  !/<Select\b/.test(productControlSource),
+  'the product field is not the old dropdown-only select',
+);
+check(
+  /<ComboboxInput\b[\s\S]*?showClear/.test(productControlSource),
+  'the product search can be cleared',
+);
+check(
+  /filter=\{matchesMedicineQuery\}/.test(productControlSource),
+  'the combobox filters with the shared name/generic/barcode matcher',
+);
+check(
+  /onValueChange=\{\(option\) => \{[\s\S]*?setMedicineId\(option\?\.id \?\? ''\)/.test(
+    productControlSource,
+  ),
+  'selecting a match records the product ID used by the receipt',
+);
+check(
+  /No product matches/.test(productControlSource) &&
+    /does not create a duplicate/.test(productControlSource),
+  'no match says to add the product instead of silently creating one',
+);
 
 /* ------------------------------------------------------------ layout guards */
 
@@ -260,6 +330,42 @@ if (byBox.ok) {
       byBox.value.receivedUnitMultiplier === 100 &&
       byBox.value.baseUnitsReceived === 200,
     'the receipt snapshots the counted unit and its multiplier',
+  );
+}
+
+/* ------------------------------------------- the chosen product is the one moved */
+
+const amoxBaseline = seed.medicines.find((m) => m.id === 'med-amoxicillin');
+const paraBaseline = seed.medicines.find((m) => m.id === 'med-paracetamol');
+const byAmoxicillin = receiveStock(seed, {
+  medicineId: 'med-amoxicillin',
+  batchNumber: 'BN-TEST-AMOX',
+  quantity: 2,
+  unitKey: 'pack',
+  supplierId: 'sup-medplus',
+  expiryDate,
+});
+
+check(
+  byAmoxicillin.ok,
+  'a receipt for the selected product is booked in',
+  byAmoxicillin.ok ? '' : byAmoxicillin.error,
+);
+if (byAmoxicillin.ok) {
+  const amox = byAmoxicillin.state.medicines.find((m) => m.id === 'med-amoxicillin');
+  const para = byAmoxicillin.state.medicines.find((m) => m.id === 'med-paracetamol');
+  check(
+    amox.totalQuantity === amoxBaseline.totalQuantity + 42,
+    'the selected Amoxicillin product gains its 2 Pack (21) delivery',
+  );
+  check(
+    para.totalQuantity === paraBaseline.totalQuantity,
+    'the previously viewed Paracetamol product is untouched',
+  );
+  check(
+    byAmoxicillin.value.medicineId === 'med-amoxicillin' &&
+      byAmoxicillin.value.medicineName === 'Amoxicillin Capsules',
+    'the receipt keeps the selected product ID and name',
   );
 }
 

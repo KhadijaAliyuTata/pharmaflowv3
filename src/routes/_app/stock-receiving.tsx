@@ -15,6 +15,14 @@ import { Button } from '~/components/ui/button';
 import { BarcodeScanner } from '~/components/barcode-scanner';
 import { Card, CardContent, CardHeader, CardTitle } from '~/components/ui/card';
 import {
+  Combobox,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxList,
+} from '~/components/ui/combobox';
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuGroup,
@@ -40,6 +48,7 @@ import {
   TableRow,
 } from '~/components/ui/table';
 import { Money, PageHeader, SectionTitle, StatTile } from '~/components/app/primitives';
+import { matchesMedicineQuery, medicineLabel } from '~/domain/medicine-search';
 import { formatCount, formatWhen, isoDate, money, multiply, sum } from '~/domain/money';
 import {
   QUANTITY_PRESETS,
@@ -57,7 +66,7 @@ import { useStockReceipts } from '~/hooks/use-stock-receipts';
 import { isDemoMode } from '~/lib/session';
 import { receiveStock as receiveStockRemote } from '~/lib/supabase/stock';
 import { usePharmacy, usePharmacyActions } from '~/store/pharmacy';
-import type { ReceiptStatus, StockMovementType } from '~/domain/types';
+import type { Medicine, ReceiptStatus, StockMovementType } from '~/domain/types';
 
 export const Route = createFileRoute('/_app/stock-receiving')({
   component: StockReceiving,
@@ -153,6 +162,15 @@ function StockReceiving() {
   const navigate = useNavigate();
 
   const [medicineId, setMedicineId] = useState('');
+  /**
+   * The text currently visible in the product search.
+   *
+   * The selected ID and the visible label can drift apart when someone edits a
+   * chosen product without picking a new match. Keeping both lets `submit`
+   * refuse that half-edited state instead of booking stock against the old
+   * product while the screen shows a different name.
+   */
+  const [productQuery, setProductQuery] = useState('');
   const [supplierId, setSupplierId] = useState('');
   const [batchNumber, setBatchNumber] = useState('');
   const [quantity, setQuantity] = useState('');
@@ -224,6 +242,7 @@ function StockReceiving() {
     }
 
     setMedicineId(match.id);
+    setProductQuery(medicineLabel(match));
     setError(null);
     toast.success(`${match.name} selected`, { description: `${match.strength} · ${code}` });
   };
@@ -277,8 +296,8 @@ function StockReceiving() {
      * Deciding here is what lets the field explain itself — and it means an
      * empty or zero quantity never reaches a mutation at all.
      */
-    if (!medicine) {
-      setError('Choose the product that arrived.');
+    if (!medicine || productQuery.trim() !== medicineLabel(medicine)) {
+      setError('Choose the product that arrived from the search results.');
       return;
     }
     if (!receiveUnit) {
@@ -435,18 +454,59 @@ function StockReceiving() {
                 <Field>
                   <FieldLabel htmlFor="recv-medicine">Product</FieldLabel>
                   <div className="flex gap-2">
-                    <Select value={medicineId} onValueChange={(value) => setMedicineId(value ?? '')}>
-                      <SelectTrigger id="recv-medicine" className="h-10 w-full">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {medicines.map((option) => (
-                          <SelectItem key={option.id} value={option.id}>
-                            {option.name} · {option.strength}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <Combobox
+                      items={medicines}
+                      value={medicine ?? null}
+                      onValueChange={(option) => {
+                        setMedicineId(option?.id ?? '');
+                        setProductQuery(option ? medicineLabel(option) : '');
+                        setError(null);
+                      }}
+                      onInputValueChange={(value) => {
+                        setProductQuery(value);
+                        setError(null);
+                      }}
+                      itemToStringLabel={medicineLabel}
+                      isItemEqualToValue={(option, selected) => option.id === selected.id}
+                      filter={matchesMedicineQuery}
+                      autoHighlight>
+                      <ComboboxInput
+                        id="recv-medicine"
+                        className="h-10 w-full"
+                        placeholder="Search product name, generic or barcode…"
+                        autoComplete="off"
+                        showClear
+                      />
+                      <ComboboxContent>
+                        <ComboboxEmpty className="justify-start px-3 py-3 text-left">
+                          <span>
+                            <span className="block font-medium text-foreground">
+                              No product matches.
+                            </span>
+                            <span className="block">
+                              Add it in Products first; receiving does not create a duplicate.
+                            </span>
+                          </span>
+                        </ComboboxEmpty>
+                        <ComboboxList>
+                          {(option: Medicine) => (
+                            <ComboboxItem
+                              key={option.id}
+                              value={option}
+                              className="items-start">
+                              <span className="flex min-w-0 flex-col">
+                                <span className="truncate font-medium">
+                                  {medicineLabel(option)}
+                                </span>
+                                <span className="truncate text-xs text-muted-foreground">
+                                  {option.genericName} · {formatCount(option.totalQuantity)} on hand
+                                </span>
+                              </span>
+                            </ComboboxItem>
+                          )}
+                        </ComboboxList>
+                      </ComboboxContent>
+                    </Combobox>
                     <Button
                       type="button"
                       variant="outline"
@@ -457,6 +517,9 @@ function StockReceiving() {
                       <ScanLine />
                     </Button>
                   </div>
+                  <p className="text-xs text-muted-foreground">
+                    Type a name, generic name or barcode, then choose a matching product.
+                  </p>
                 </Field>
 
                 <Field>
