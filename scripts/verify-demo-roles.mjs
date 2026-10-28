@@ -40,6 +40,7 @@ const investorDemo = read('src/routes/investor-demo.tsx');
 const appLayout = read('src/routes/_app.tsx');
 const ownerGate = read('src/hooks/use-is-owner.ts');
 const nav = read('src/lib/nav.ts');
+const pos = read('src/routes/_app/pos.tsx');
 
 check(
   'a demo role switch persists the role used on reload',
@@ -113,6 +114,15 @@ check(
     login.includes('method="post"') &&
     login.includes('disabled={!ready}'),
   'the native fallback must be POST-only and disabled until React is ready',
+);
+
+check(
+  'the demo POS exposes explicit tablet, card and box choices',
+  /isDemoMode\(\)\s*&&\s*medicine\.units\.length > 1/.test(pos) &&
+    /aria-pressed=\{selected\}/.test(pos) &&
+    /chooseUnit\(medicine, option\.key\)/.test(pos) &&
+    /value=\{unit\?\.sellingPrice \?\? medicine\.pricePerBaseUnit\}/.test(pos),
+  'a touch-screen demo must not depend on the hidden `u` shortcut, and the price must follow the chosen unit',
 );
 
 check(

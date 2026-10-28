@@ -937,6 +937,11 @@ function PointOfSale() {
     return medicine.units.find((u) => u.key === chosen) ?? defaultUnit(medicine);
   };
 
+  /** Pick a specific trade unit for a product. */
+  const chooseUnit = (medicine: Medicine, unitKey: string) => {
+    setUnitChoice((choice) => ({ ...choice, [medicine.id]: unitKey }));
+  };
+
   /** Step `u` cycles the highlighted product through its units. */
   const cycleUnit = (medicine: Medicine) => {
     if (medicine.units.length < 2) return;
@@ -1970,22 +1975,79 @@ function PointOfSale() {
                       )}
                     </div>
 
-                    {/* Plain text, not a control. The unit is only something you
-                        change deliberately, so it costs a keypress rather than a
-                        Select mounted on every row. */}
-                    <div className="flex shrink-0 items-center gap-3">
-                      <div className="text-right">
-                        <p className="text-xs text-muted-foreground">
-                          {unit?.name ?? '—'}
-                          {medicine.units.length > 1 && (
-                            <span className="ml-1 opacity-60">· press u</span>
-                          )}
-                        </p>
-                        <Money
-                          value={medicine.pricePerBaseUnit}
-                          className="text-sm font-semibold"
-                        />
-                      </div>
+                    {/* Demo testers are usually on a touch screen, so the demo
+                        build shows the trade units as buttons instead of relying
+                        on the `u` shortcut. Live keeps the compact text control. */}
+                    <div
+                      className="flex shrink-0 flex-col items-end gap-1.5"
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      {isDemoMode() && medicine.units.length > 1 ? (
+                        <>
+                          <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+                            Sell as
+                          </span>
+                          <div
+                            role="group"
+                            aria-label={`Selling unit for ${medicine.name}`}
+                            className="flex flex-wrap justify-end gap-1"
+                          >
+                            {medicine.units.map((option) => {
+                              const selected = unit?.key === option.key;
+                              return (
+                                <button
+                                  key={option.key}
+                                  type="button"
+                                  aria-pressed={selected}
+                                  onClick={() => chooseUnit(medicine, option.key)}
+                                  className={cn(
+                                    'rounded-full border px-2 py-1 text-[11px] font-medium transition-colors',
+                                    selected
+                                      ? 'border-primary bg-primary text-primary-foreground'
+                                      : 'border-border bg-background text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                                  )}
+                                >
+                                  {option.name}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="text-right">
+                              <Money
+                                value={unit?.sellingPrice ?? medicine.pricePerBaseUnit}
+                                className="text-sm font-semibold"
+                              />
+                              <p className="text-[11px] text-muted-foreground">
+                                per {unit?.name ?? 'unit'}
+                              </p>
+                            </div>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="h-7 px-2 text-xs"
+                              disabled={Boolean(block)}
+                              onClick={() => addHighlighted(medicine)}
+                            >
+                              <Plus className="size-3" /> Add
+                            </Button>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="text-right">
+                          <p className="text-xs text-muted-foreground">
+                            {unit?.name ?? '—'}
+                            {medicine.units.length > 1 && (
+                              <span className="ml-1 opacity-60">· press u</span>
+                            )}
+                          </p>
+                          <Money
+                            value={unit?.sellingPrice ?? medicine.pricePerBaseUnit}
+                            className="text-sm font-semibold"
+                          />
+                        </div>
+                      )}
                     </div>
                   </li>
                 );
