@@ -13,6 +13,12 @@
  *     movement, notification and audit row are written, and an invalid count
  *     changes nothing at all.
  *
+ * It also covers the two cross-screen gaps found after the first live receipt:
+ * Inventory's cost/supplier display comes from the persisted receipt terms, and
+ * the selling-price mirror is planned from the persisted base unit rather than
+ * the Stock Receiving page's `createdProduct` state. That last one is what makes
+ * a reload between creation and receipt safe.
+ *
  * It imports the same modules the screen and the store import. `bun` strips the
  * type-only imports, so no build step, network or Supabase project is involved.
  */
@@ -26,7 +32,16 @@ import {
   normaliseQuantityTyping,
   parseQuantityText,
 } from '../src/domain/quantity-input.ts';
-import { receiveStock } from '../src/domain/operations.ts';
+import { receiveStock, createMedicine } from '../src/domain/operations.ts';
+import {
+  blockingDuplicates,
+  emptyNewProductDraft,
+  findProductDuplicates,
+  productUnitKey,
+  validateNewProductDraft,
+} from '../src/domain/product-create.ts';
+import { planReceiptPriceSync } from '../src/domain/receipt-pricing.ts';
+import { withReceiptTerms } from '../src/domain/receipt-terms.ts';
 import { createSeedState } from '../src/domain/seed.ts';
 
 // The field's state logic can be perfect and still look broken if its flex row
@@ -34,6 +49,10 @@ import { createSeedState } from '../src/domain/seed.ts';
 // the layout fix here too, because the domain checks below cannot see CSS.
 const routeSource = readFileSync(
   new URL('../src/routes/_app/stock-receiving.tsx', import.meta.url),
+  'utf8'
+);
+const inventorySource = readFileSync(
+  new URL('../src/routes/_app/inventory.tsx', import.meta.url),
   'utf8'
 );
 const productControlSource = routeSource.slice(
@@ -113,8 +132,361 @@ check(
 );
 check(
   /No product matches/.test(productControlSource) &&
-    /does not create a duplicate/.test(productControlSource),
-  'no match says to add the product instead of silently creating one',
+    /Add new product:/.test(productControlSource) &&
+    /setAddProductOpen\(true\)/.test(productControlSource),
+  'no match offers a deliberate add-product action instead of silently creating one',
+);
+check(
+  /<ProductCreateDialog\b/.test(routeSource) &&
+    /onSubmit=\{createProduct\}/.test(routeSource) &&
+    /onCreated=\{productCreated\}/.test(routeSource),
+  'the add-product dialog is wired to the receiving screen',
+);
+check(
+  /items=\{\(medicine\?\.units \?\? \[\]\)\.map/.test(routeSource) &&
+    /items=\{suppliers\.map/.test(routeSource),
+  'programmatic unit and supplier selections display names, not raw keys',
+);
+check(
+  /Everything is recorded in \{baseUnit\.name\}/.test(routeSource),
+  'the base-unit note does not pluralise an arbitrary unit name',
+);
+
+/* -------------------------------------------------- creating a new product */
+
+const validDraft = {
+  ...emptyNewProductDraft('  Cough   Syrup '),
+  genericName: 'Guaifenesin',
+  strength: '100 mg/5 ml',
+  dosageForm: 'Syrup',
+  barcode: ' 999000111 ',
+  unitName: 'Bottle (100 ml)',
+  sellingPrice: ' 125.50 ',
+  prescriptionClass: 'otc',
+};
+const checkedDraft = validateNewProductDraft(validDraft);
+check(checkedDraft.ok, 'a complete new-product draft validates');
+if (checkedDraft.ok) {
+  const value = checkedDraft.value;
+  check(value.name === 'Cough Syrup', 'the product name is trimmed and whitespace-collapsed');
+  check(value.unitKey === productUnitKey('Bottle (100 ml)'), 'the unit key is derived from the unit name');
+  check(value.unitKey === 'bottle-100-ml', 'the derived unit key is a stable, database-safe key');
+  check(value.barcode === '999000111', 'the barcode is trimmed');
+  check(value.sellingPrice === 125.5, 'a valid selling price is parsed once');
+}
+
+const incomplete = validateNewProductDraft(emptyNewProductDraft());
+check(
+  !incomplete.ok &&
+    Boolean(incomplete.errors.name) &&
+    Boolean(incomplete.errors.strength) &&
+    Boolean(incomplete.errors.dosageForm) &&
+    Boolean(incomplete.errors.unitName),
+  'required product fields are refused before any write',
+);
+
+const sameProduct = findProductDuplicates(catalog, {
+  name: paracetamol.name,
+  genericName: '',
+  strength: paracetamol.strength,
+  dosageForm: paracetamol.dosageForm,
+  barcode: '',
+});
+check(
+  blockingDuplicates(sameProduct).length > 0,
+  'an exact catalogue match blocks creation',
+);
+
+const sameBarcode = findProductDuplicates(catalog, {
+  name: 'A Different Name',
+  genericName: '',
+  strength: '1mg',
+  dosageForm: 'Tablet',
+  barcode: paracetamol.barcode,
+});
+check(
+  blockingDuplicates(sameBarcode).some((entry) => entry.kind === 'barcode'),
+  'a reused barcode blocks creation',
+);
+
+const similarProduct = findProductDuplicates(catalog, {
+  name: 'Another Paracetamol Brand',
+  genericName: paracetamol.genericName,
+  strength: paracetamol.strength,
+  dosageForm: paracetamol.dosageForm,
+  barcode: '',
+});
+check(
+  similarProduct.some((entry) => entry.kind === 'similar') &&
+    blockingDuplicates(similarProduct).length === 0,
+  'a same-generic brand warns but is not silently treated as a duplicate',
+);
+
+const demoState = createSeedState();
+const demoCreated = createMedicine(demoState, checkedDraft.value);
+check(demoCreated.ok, 'the demo catalogue can create the valid product');
+if (demoCreated.ok) {
+  check(demoCreated.value.totalQuantity === 0, 'creating a product does not create stock');
+  check(demoCreated.value.batches.length === 0, 'creating a product does not create a batch');
+  check(demoCreated.value.units[0].sellingPrice === 125.5, 'the new product carries its unit price');
+  check(demoCreated.value.prescriptionStatus === 'OTC', 'the prescription class is carried onto the product');
+
+  const withCreated = { ...demoState, medicines: [...demoState.medicines, demoCreated.value] };
+  const duplicateAgain = createMedicine(withCreated, checkedDraft.value);
+  check(!duplicateAgain.ok, 'the demo path refuses a duplicate product');
+}
+
+const assistantState = {
+  ...demoState,
+  currentUser: { ...demoState.currentUser, role: 'assistant', canApprovePricing: false },
+};
+const assistantCreated = createMedicine(assistantState, {
+  ...checkedDraft.value,
+  name: 'Assistant Product',
+  barcode: null,
+  sellingPrice: 999,
+});
+check(
+  assistantCreated.ok && assistantCreated.value.pricePerBaseUnit === 0,
+  'an assistant-created product is not silently priced',
+);
+
+/* --------------------------------------- Inventory: persisted receipt terms */
+
+const receiptProduct = demoCreated.ok ? demoCreated.value : null;
+if (receiptProduct) {
+  const unit = receiptProduct.units[0];
+  const liveLike = {
+    ...receiptProduct,
+    name: 'Reload Cefixime',
+    supplier: '',
+    pricePerBaseUnit: 0,
+    units: [{ ...unit, sellingPrice: 0 }],
+    batches: [
+      {
+        id: 'bat-rx-older',
+        batchNumber: 'LOT-OLDER',
+        expiryDate: '2027-06-30',
+        quantity: 4,
+        supplier: 'sup-abc',
+        receivedDate: '2026-09-01',
+        isRecalled: false,
+      },
+      {
+        id: 'bat-rx-latest',
+        batchNumber: 'LOT-LATEST',
+        expiryDate: '2028-01-31',
+        quantity: 10,
+        supplier: 'sup-medplus',
+        receivedDate: '2026-10-27',
+        isRecalled: false,
+      },
+    ],
+  };
+  delete liveLike.costPerBaseUnit;
+
+  const medicineCosts = new Map([[liveLike.id, 0]]);
+  const batchCosts = new Map([
+    ['bat-rx-older', 250],
+    ['bat-rx-latest', 300],
+  ]);
+  const [enriched] = withReceiptTerms([liveLike], { medicineCosts, batchCosts });
+
+  check(
+    enriched.supplier === 'sup-medplus',
+    'Inventory falls back to the latest persisted lot\u2019s supplier when the product row has none',
+  );
+  check(
+    enriched.costPerBaseUnit === 300,
+    'Inventory shows the latest lot cost when the product cost view is still zero',
+    String(enriched.costPerBaseUnit),
+  );
+  check(
+    enriched.batches.find((batch) => batch.id === 'bat-rx-latest')?.costPerBaseUnit === 300 &&
+      enriched.batches.find((batch) => batch.id === 'bat-rx-older')?.costPerBaseUnit === 250,
+    'the product sheet gets each lot\u2019s owner-only cost',
+  );
+  check(
+    liveLike.supplier === '' && liveLike.costPerBaseUnit === undefined,
+    'enriching Inventory does not write back to the catalogue row',
+  );
+
+  const [zeroOnly] = withReceiptTerms(
+    [{ ...liveLike, batches: [] }],
+    { medicineCosts, batchCosts },
+  );
+  check(
+    zeroOnly.costPerBaseUnit === undefined,
+    'a zero in the owner cost view is unavailable, not a free product',
+  );
+
+  const [existing] = withReceiptTerms(
+    [
+      {
+        ...liveLike,
+        supplier: 'sup-abc',
+        costPerBaseUnit: 120,
+        batches: [liveLike.batches[1]],
+      },
+    ],
+    { medicineCosts: new Map([[liveLike.id, 120]]), batchCosts },
+  );
+  check(
+    existing.supplier === 'sup-abc' && existing.costPerBaseUnit === 120,
+    'a supplier and cost already recorded on the product are preserved',
+  );
+}
+
+/* -------------------------------- selling price after a page reload */
+
+const reloadSource = receiptProduct
+  ? {
+      ...receiptProduct,
+      name: 'Reload Priced Product',
+      pricePerBaseUnit: 0,
+      units: receiptProduct.units.map((unit) => ({ ...unit, sellingPrice: 0 })),
+    }
+  : null;
+
+if (reloadSource) {
+  // Serialise and parse to model the catalogue row the next page session gets
+  // from the database. No `createdProduct` reference exists here.
+  const afterReload = JSON.parse(JSON.stringify(reloadSource));
+  const baseUnit = afterReload.units.find((unit) => unit.multiplier === 1);
+  const plan = planReceiptPriceSync({
+    canPrice: true,
+    alreadyReceived: false,
+    receiptConfirmed: true,
+    pricePerBaseUnit: 500,
+    baseUnit,
+  });
+  check(
+    plan?.unitKey === baseUnit.key && plan?.expectedPrice === 0 && plan?.newPrice === 500,
+    'a reload between creation and receipt still plans the base-unit price update',
+    JSON.stringify(plan),
+  );
+
+  const alreadyPriced = {
+    ...afterReload,
+    units: afterReload.units.map((unit) => ({ ...unit, sellingPrice: 450 })),
+  };
+  const changed = planReceiptPriceSync({
+    canPrice: true,
+    alreadyReceived: false,
+    receiptConfirmed: true,
+    pricePerBaseUnit: 500,
+    baseUnit: alreadyPriced.units.find((unit) => unit.multiplier === 1),
+  });
+  check(
+    changed?.expectedPrice === 450 && changed?.newPrice === 500,
+    'the expected price comes from the catalogue row, not a page-session copy',
+  );
+
+  check(
+    planReceiptPriceSync({
+      canPrice: true,
+      alreadyReceived: false,
+      receiptConfirmed: true,
+      pricePerBaseUnit: 500,
+      baseUnit: afterReload.units.find((unit) => unit.multiplier === 1),
+    })?.unitKey === afterReload.units.find((unit) => unit.multiplier === 1).key,
+    'the price sync targets the persisted base unit',
+  );
+  check(
+    planReceiptPriceSync({
+      canPrice: true,
+      alreadyReceived: false,
+      receiptConfirmed: true,
+      pricePerBaseUnit: 0,
+      baseUnit,
+    }) === null,
+    'an unpriced receipt does not clear or invent a selling price',
+  );
+  check(
+    planReceiptPriceSync({
+      canPrice: false,
+      alreadyReceived: false,
+      receiptConfirmed: true,
+      pricePerBaseUnit: 500,
+      baseUnit,
+    }) === null,
+    'a non-owner does not attempt the owner-only price RPC',
+  );
+  check(
+    planReceiptPriceSync({
+      canPrice: true,
+      alreadyReceived: true,
+      receiptConfirmed: true,
+      pricePerBaseUnit: 500,
+      baseUnit,
+    }) === null,
+    'an idempotent receipt replay does not write a second price change',
+  );
+  check(
+    planReceiptPriceSync({
+      canPrice: true,
+      alreadyReceived: false,
+      receiptConfirmed: false,
+      pricePerBaseUnit: 500,
+      baseUnit,
+    }) === null,
+    'a receipt awaiting pricing does not overwrite the catalogue price',
+  );
+  check(
+    planReceiptPriceSync({
+      canPrice: true,
+      alreadyReceived: false,
+      receiptConfirmed: true,
+      pricePerBaseUnit: 500,
+      baseUnit: afterReload.units.find((unit) => unit.multiplier !== 1),
+    }) === null,
+    'a pack unit is never treated as the base-unit price',
+  );
+}
+
+/* --------------------------------------- cross-screen wiring guards */
+
+check(
+  /useSuppliers\(\)/.test(inventorySource) && !/state\.suppliers/.test(inventorySource),
+  'Inventory resolves supplier names from the live supplier source',
+);
+check(
+  /useCatalogueCosts\(isOwner\)/.test(inventorySource) &&
+    /withReceiptTerms\(catalogue, \{ medicineCosts, batchCosts \}\)/.test(inventorySource),
+  'Inventory bridges owner cost views and persisted lot terms into the catalogue',
+);
+check(
+  /function withReceiptTerms|export function withReceiptTerms/.test(
+    readFileSync(new URL('../src/domain/receipt-terms.ts', import.meta.url), 'utf8'),
+  ),
+  'the receipt-term bridge is a shared, testable module',
+);
+
+const priceSyncSource = routeSource.slice(
+  routeSource.indexOf('const priceSync'),
+  routeSource.indexOf('setBatchNumber(\'\')', routeSource.indexOf('const priceSync')),
+);
+check(
+  /planReceiptPriceSync\(\{/.test(priceSyncSource) && /baseUnit,/.test(priceSyncSource),
+  'the receipt price sync is planned from the persisted base unit',
+);
+check(
+  !/createdProduct/.test(priceSyncSource),
+  'the receipt price sync no longer depends on the page\u2019s created-product copy',
+);
+check(
+  !/unitKey:\s*receiveUnit\.key/.test(priceSyncSource),
+  'a pack delivery cannot write its pack price onto the base unit',
+);
+
+const stockSource = readFileSync(new URL('../src/lib/supabase/stock.ts', import.meta.url), 'utf8');
+const receiptsQuery = stockSource.slice(
+  stockSource.indexOf('export async function listStockReceipts'),
+  stockSource.indexOf('export async function listStockMovements'),
+);
+check(
+  /profiles!stock_receipts_received_by_fkey\(/.test(receiptsQuery),
+  'recent receipts disambiguate received_by when embedding the receiver profile',
 );
 
 /* ------------------------------------------------------------ layout guards */

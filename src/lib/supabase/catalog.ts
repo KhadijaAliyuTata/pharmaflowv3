@@ -1,4 +1,11 @@
-import type { BatchInsert, BatchRow, BatchUpdate, MedicineCostRow, MedicineRow } from '../db.types';
+import type {
+  BatchCostRow,
+  BatchInsert,
+  BatchRow,
+  BatchUpdate,
+  MedicineCostRow,
+  MedicineRow,
+} from '../db.types';
 import { client, hasSession, isSupabaseConfigured } from './client';
 import { fromList, ok, type Result } from './result';
 
@@ -96,7 +103,7 @@ export const BATCH_COLUMNS =
   'recall_reason,' +
   'created_at';
 
-type MedicineWithBatches = MedicineRow & { medicine_batches?: BatchRow[] };
+export type MedicineWithBatches = MedicineRow & { medicine_batches?: BatchRow[] };
 
 
 /**
@@ -180,22 +187,86 @@ export async function searchMedicines(term: string): Promise<Result<MedicineRow[
 /* ------------------------------------------------------------- write paths */
 
 /**
- * Catalogue writes are not part of the read-only migration and are deliberately
- * absent rather than present-and-broken.
+ * Create one catalogue product through the receiving flow.
  *
- * A previous version of this file exported `createMedicine` and
- * `updateMedicine`. Both ended in a bare `.select()`, which resolves to `*` and
- * therefore could never succeed against the real grants — a function that looks
- * usable, type-checks, and fails on first call is worse than one that is not
- * there. They also had no callers.
+ * The write is an RPC rather than a direct table insert because `branch_id` has
+ * no default: letting the browser choose it would make tenant isolation a
+ * frontend promise. `pf_create_medicine` derives the branch from the signed-in
+ * profile, enforces the same duplicate/barcode rules as the form, writes the
+ * audit event, and drops a non-owner's price exactly as `pf_receive_stock` does.
  *
- * They return in the write phase, where the shapes need deciding first: whether
- * a create supplies `branch_id` or lets `pf_current_branch()` decide, and what a
- * partial update is permitted to contain given the column grants.
+ * The returned row is re-read with the explicit catalogue column list. A bare
+ * `.select()` would expand to `cost_per_base_unit`, which `authenticated` cannot
+ * read, so the product would appear to save and then fail to load.
+ *
+ * Stock is deliberately not created here. The receipt remains the only write
+ * that adds a batch and moves quantity.
+ */
+export interface CreateMedicineInput {
+  name: string;
+  genericName: string;
+  strength: string;
+  dosageForm: string;
+  barcode: string | null;
+  unitName: string;
+  unitKey: string;
+  prescriptionClass: 'otc' | 'prescription' | 'controlled';
+  sellingPrice: number;
+}
+
+function createMedicineError(error: { message: string; code?: string }): string {
+  if (error.code === '42883') {
+    return 'The catalogue is not ready to accept new products yet. Apply the latest database migration.';
+  }
+  if (error.code === '23505' || error.code === 'P0001') return error.message;
+  if (error.code === '42501') {
+    return 'You do not have permission to add products to this pharmacy.';
+  }
+  return error.message;
+}
+
+export async function createMedicine(
+  input: CreateMedicineInput,
+): Promise<Result<MedicineWithBatches>> {
+  if (!isSupabaseConfigured()) return { ok: false, error: OFFLINE };
+  if (!(await hasSession())) return { ok: false, error: NO_SESSION };
+
+  const { data, error } = await client().rpc('pf_create_medicine', {
+    p_product: {
+      name: input.name,
+      generic_name: input.genericName,
+      strength: input.strength,
+      dosage_form: input.dosageForm,
+      barcode: input.barcode,
+      unit_name: input.unitName,
+      unit_key: input.unitKey,
+      prescription_class: input.prescriptionClass,
+      selling_price: input.sellingPrice,
+    },
+  });
+
+  if (error) return { ok: false, error: createMedicineError(error), code: error.code };
+
+  const payload = (Array.isArray(data) ? data[0] : data) as { id?: string; medicine_id?: string } | null;
+  const id = payload?.id ?? payload?.medicine_id;
+  if (!id) return { ok: false, error: 'The product was not created.' };
+
+  // Re-read rather than trusting the RPC's JSON: this is the same shape the
+  // catalogue list uses, so the new row can be selected immediately.
+  return getMedicine(id);
+}
+
+/**
+ * Direct inserts and updates remain deliberately absent.
+ *
+ * A previous version exported `createMedicine` and `updateMedicine` that ended
+ * in a bare `.select()` — which resolves to `*` and could never succeed against
+ * the real grants. The single create above goes through the RPC; there is still
+ * no general-purpose catalogue update path.
  */
 export const NOT_IN_SCOPE = {
   ok: false,
-  error: 'Catalogue writes are not implemented in the read-only migration',
+  error: 'This catalogue write is not implemented',
 } as const satisfies Result<never>;
 
 /* ------------------------------------------------------------------ stock */
@@ -307,7 +378,7 @@ export async function listMedicineCosts(): Promise<Result<MedicineCostRow[]>> {
 }
 
 /** Batch purchase cost, owner only. Same rule as `listMedicineCosts`. */
-export async function listBatchCosts() {
+export async function listBatchCosts(): Promise<Result<BatchCostRow[]>> {
   if (!isSupabaseConfigured()) return { ok: false, error: OFFLINE };
   if (!(await hasSession())) return { ok: false, error: NO_SESSION };
 

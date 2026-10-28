@@ -50,6 +50,7 @@ import {
 import { Money, PageHeader, SectionTitle, StatTile } from '~/components/app/primitives';
 import { matchesMedicineQuery, medicineLabel } from '~/domain/medicine-search';
 import { formatCount, formatWhen, isoDate, money, multiply, sum } from '~/domain/money';
+import { planReceiptPriceSync } from '~/domain/receipt-pricing';
 import {
   QUANTITY_PRESETS,
   QUANTITY_PROBLEM,
@@ -60,12 +61,20 @@ import {
 } from '~/domain/quantity-input';
 import { findBaseUnit, findUnit } from '~/domain/units';
 import { useIsOwner } from '~/hooks/use-is-owner';
+import { toMedicine } from '~/hooks/medicine-mapping';
 import { useMedicines } from '~/hooks/use-medicines';
 import { useStockMovements } from '~/hooks/use-stock-movements';
+import { useSuppliers } from '~/hooks/use-suppliers';
 import { useStockReceipts } from '~/hooks/use-stock-receipts';
+import {
+  ProductCreateDialog,
+  type ProductCreateOutcome,
+} from '~/components/medicine/product-create-dialog';
+import type { NewProductInput } from '~/domain/product-create';
 import { isDemoMode } from '~/lib/session';
+import { createMedicine as createMedicineRemote, updateMedicinePrice } from '~/lib/supabase/catalog';
 import { receiveStock as receiveStockRemote } from '~/lib/supabase/stock';
-import { usePharmacy, usePharmacyActions } from '~/store/pharmacy';
+import { usePharmacyActions } from '~/store/pharmacy';
 import type { Medicine, ReceiptStatus, StockMovementType } from '~/domain/types';
 
 export const Route = createFileRoute('/_app/stock-receiving')({
@@ -129,7 +138,9 @@ function StockReceiving() {
   // Catalogue from Supabase in live mode; useMedicines has no local
   // fallback there, so a failed read surfaces as an error, not as seed data.
   const { medicines, refresh: refreshMedicines } = useMedicines();
-  const suppliers = usePharmacy((state) => state.suppliers);
+  // The hook reads Supabase in a live build and falls back to the seeded store in
+  // demo, so the supplier picker is populated in both deployment modes.
+  const { suppliers } = useSuppliers();
   // Receipts and movements, in whichever mode has them. Both read Supabase in a
   // live build and the seeded ledger in demo, so the counts and tables below are
   // the same figures either way.
@@ -158,10 +169,18 @@ function StockReceiving() {
   // In demo mode the store *is* the pharmacy and receiving stays local, exactly
   // as it always was. In live mode the delivery is the database's to record.
   const live = !isDemoMode();
-  const { receiveStock } = usePharmacyActions();
+  const { receiveStock, createMedicine: createMedicineLocal } = usePharmacyActions();
   const navigate = useNavigate();
 
   const [medicineId, setMedicineId] = useState('');
+  /**
+   * A product created from this screen, held until the catalogue re-read
+   * includes it. The database row is already saved; this is so the receipt can
+   * be completed even if the follow-up list read is slow or fails. Once the
+   * refresh returns the same id, the list wins and this copy stops being used.
+   */
+  const [createdProduct, setCreatedProduct] = useState<Medicine | null>(null);
+  const [addProductOpen, setAddProductOpen] = useState(false);
   /**
    * The text currently visible in the product search.
    *
@@ -197,7 +216,18 @@ function StockReceiving() {
   const [error, setError] = useState<string | null>(null);
   const [scannerOpen, setScannerOpen] = useState(false);
 
-  const medicine = medicines.find((m) => m.id === medicineId);
+  const medicine =
+    medicines.find((m) => m.id === medicineId) ??
+    (createdProduct?.id === medicineId ? createdProduct : undefined);
+  /**
+   * The combination of the server catalogue and a just-created row that the
+   * catalogue read has not returned yet. Keeping it in `items` means the new
+   * product is immediately selectable and visible with the same label.
+   */
+  const productOptions =
+    createdProduct && !medicines.some((m) => m.id === createdProduct.id)
+      ? [createdProduct, ...medicines]
+      : medicines;
   const cost = money(Number(costInput) || 0);
   const price = money(Number(priceInput) || 0);
   /**
@@ -224,19 +254,18 @@ function StockReceiving() {
   /**
    * A scan selects an existing product or reports that there isn't one.
    *
-   * It deliberately does not create a product. Receiving stock against a
-   * barcode that matches nothing means either the barcode is not in the
-   * catalogue yet or the attendant scanned the wrong pack — and silently
-   * minting a new product from one of those is how a pharmacy ends up
-   * dispensing a drug nobody chose. The fix is a deliberate product creation,
-   * which is a different screen with pricing attached.
+   * It deliberately does not create a product. A scan that matches nothing
+   * means either the barcode is not in the catalogue yet or the attendant
+   * scanned the wrong pack. Silently minting a product from one of those is how
+   * a pharmacy ends up dispensing a drug nobody chose; the deliberate route is
+   * the `+ Add new product` option under the name search.
    */
   const onBarcode = (code: string) => {
-    const match = medicines.find((medicine) => medicine.barcode === code);
+    const match = productOptions.find((medicine) => medicine.barcode === code);
 
     if (!match) {
       toast.error(`No product with barcode ${code}`, {
-        description: 'Add the product to the catalogue first, then receive against it.',
+        description: 'Search by product name and use “Add new product” if it is genuinely new.',
       });
       return;
     }
@@ -284,6 +313,41 @@ function StockReceiving() {
    * only on success, which is what makes a double-click safe rather than a second
    * delivery. See `newReceiptNumber`.
    */
+  /**
+   * Persist the product through whichever catalogue the build actually uses.
+   *
+   * Both paths return a saved `Medicine`, never a draft. The dialog refuses to
+   * close until it has one, and `createdProduct` keeps that row available for
+   * this receipt even if the catalogue list is still catching up.
+   */
+  const createProduct = async (input: NewProductInput): Promise<ProductCreateOutcome> => {
+    if (!live) {
+      const result = createMedicineLocal(input);
+      return result.ok ? { ok: true, medicine: result.value } : { ok: false, error: result.error };
+    }
+
+    const result = await createMedicineRemote(input);
+    if (!result.ok) return { ok: false, error: result.error };
+    return { ok: true, medicine: toMedicine(result.data) };
+  };
+
+  const productCreated = (product: Medicine) => {
+    setCreatedProduct(product);
+    setMedicineId(product.id);
+    setProductQuery(medicineLabel(product));
+    // A newly-created row has one base unit. Selecting it saves a second
+    // decision without taking away the unit control if more are added later.
+    setReceiveUnitKey(
+      product.units.find((unit) => unit.multiplier === 1)?.key ?? product.units[0]?.key ?? '',
+    );
+    setError(null);
+    setAddProductOpen(false);
+    refreshMedicines();
+    toast.success(`${product.name} added to the catalogue`, {
+      description: `${product.strength} · ${product.dosageForm} — now selected for this delivery.`,
+    });
+  };
+
   const submit = async () => {
     if (submitting) return;
     setError(null);
@@ -378,6 +442,36 @@ function StockReceiving() {
       }
 
       const saved = result.data;
+
+      // The receipt already carries the price the owner typed, but
+      // `pf_receive_stock` writes it on the receipt, not on the product. Mirror
+      // it through the existing owner-only price RPC so the product is saleable
+      // at the counter after this delivery. The decision uses the base unit on
+      // the persisted catalogue row, not `createdProduct`, so a reload between
+      // creating the product and receiving it does not lose the sync.
+      //
+      // The stock receipt is already committed; a price refusal must not turn it
+      // into a failed receipt.
+      const priceSync = planReceiptPriceSync({
+        canPrice,
+        alreadyReceived: saved.alreadyReceived,
+        receiptConfirmed: saved.state === 'confirmed',
+        pricePerBaseUnit: price,
+        baseUnit,
+      });
+      if (priceSync) {
+        const priced = await updateMedicinePrice({
+          medicineId: medicine.id,
+          ...priceSync,
+          reason: `Selling price from stock receipt ${saved.receiptNumber}`,
+        });
+        if (!priced.ok) {
+          toast.warning('Stock received, but the selling price was not updated', {
+            description: `${priced.error} Set the price in Inventory before selling this product.`,
+          });
+        }
+      }
+
       setBatchNumber('');
       setQuantity('');
       setQuantityProblem(null);
@@ -455,7 +549,7 @@ function StockReceiving() {
                   <FieldLabel htmlFor="recv-medicine">Product</FieldLabel>
                   <div className="flex gap-2">
                     <Combobox
-                      items={medicines}
+                      items={productOptions}
                       value={medicine ?? null}
                       onValueChange={(option) => {
                         setMedicineId(option?.id ?? '');
@@ -478,15 +572,37 @@ function StockReceiving() {
                         showClear
                       />
                       <ComboboxContent>
-                        <ComboboxEmpty className="justify-start px-3 py-3 text-left">
-                          <span>
+                        <ComboboxEmpty className="block px-3 py-3 text-left">
+                          <span className="block">
                             <span className="block font-medium text-foreground">
                               No product matches.
                             </span>
-                            <span className="block">
-                              Add it in Products first; receiving does not create a duplicate.
+                            <span className="block text-muted-foreground">
+                              Check the spelling, or add it to this pharmacy&apos;s catalogue.
                             </span>
                           </span>
+                          {productQuery.trim() !== '' && (
+                            <button
+                              type="button"
+                              className="mt-2 flex w-full items-center gap-2 rounded-md border border-dashed border-border px-2.5 py-2 text-left text-sm font-medium text-foreground transition-colors hover:bg-muted focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+                              onMouseDown={(event) => {
+                                // Keep the combobox from treating this as a
+                                // selection or closing before the dialog opens.
+                                event.preventDefault();
+                                event.stopPropagation();
+                              }}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                setAddProductOpen(true);
+                              }}
+                            >
+                              <Plus className="size-4 shrink-0" />
+                              <span className="min-w-0 truncate">
+                                Add new product: “{productQuery.trim()}”
+                              </span>
+                            </button>
+                          )}
                         </ComboboxEmpty>
                         <ComboboxList>
                           {(option: Medicine) => (
@@ -537,6 +653,13 @@ function StockReceiving() {
                   <Field>
                     <FieldLabel htmlFor="recv-unit">Counted in</FieldLabel>
                     <Select
+                      // The value is the stable unit key. Without this map Base UI
+                      // shows the raw key in the trigger for a value set
+                      // programmatically — as it is after a product is created.
+                      items={(medicine?.units ?? []).map((unit) => ({
+                        value: unit.key,
+                        label: unit.name,
+                      }))}
                       value={receiveUnit?.key ?? ''}
                       onValueChange={(value) => setReceiveUnitKey(value ?? '')}
                       disabled={!medicine}
@@ -554,7 +677,7 @@ function StockReceiving() {
                     </Select>
                     {medicine && baseUnit && (
                       <p className="text-xs text-muted-foreground">
-                        Base unit is {baseUnit.name}. Everything is stored in {baseUnit.name.toLowerCase()}s.
+                        Base unit is {baseUnit.name}. Everything is recorded in {baseUnit.name}.
                       </p>
                     )}
                   </Field>
@@ -710,7 +833,13 @@ function StockReceiving() {
 
                 <Field>
                   <FieldLabel htmlFor="recv-supplier">Supplier</FieldLabel>
-                  <Select value={supplierId} onValueChange={(value) => setSupplierId(value ?? '')}>
+                  <Select
+                    items={suppliers.map((supplier) => ({
+                      value: supplier.id,
+                      label: supplier.name,
+                    }))}
+                    value={supplierId}
+                    onValueChange={(value) => setSupplierId(value ?? '')}>
                     <SelectTrigger id="recv-supplier" className="h-10 w-full">
                       <SelectValue />
                     </SelectTrigger>
@@ -921,6 +1050,16 @@ function StockReceiving() {
           </Card>
         </div>
       </div>
+
+      <ProductCreateDialog
+        open={addProductOpen}
+        initialName={productQuery.trim()}
+        existing={productOptions}
+        canPrice={canPrice}
+        onOpenChange={setAddProductOpen}
+        onSubmit={createProduct}
+        onCreated={productCreated}
+      />
 
       <BarcodeScanner
         open={scannerOpen}

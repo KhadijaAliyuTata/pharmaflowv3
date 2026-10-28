@@ -85,6 +85,10 @@ export type MedicineRef = { id: string; name: string };
 /**
  * A receipt row with its product and its receiver embedded.
  *
+ * The `profiles` embed must name the `received_by` foreign key. A receipt also
+ * has `priced_by`, so an unhinted `profiles(...)` embed is ambiguous and
+ * PostgREST rejects the whole query with `PGRST201`.
+ *
  * `db.types` declares no `Relationship` for `stock_receipts`, so the parsed row
  * type does not carry these keys even though PostgREST returns them — the same
  * cast `audit.ts` uses for its `profiles` embed.
@@ -110,7 +114,7 @@ export async function listStockReceipts(limit = 50): Promise<Result<ReceiptWithR
   const query = await client()
     .from('stock_receipts')
     .select(
-      `${STOCK_RECEIPT_COLUMNS},medicines(${MEDICINE_REF_COLUMNS}),profiles(${STAFF_REF_COLUMNS})`,
+      `${STOCK_RECEIPT_COLUMNS},medicines(${MEDICINE_REF_COLUMNS}),profiles!stock_receipts_received_by_fkey(${STAFF_REF_COLUMNS})`,
     )
     .order('received_at', { ascending: false })
     .limit(limit);

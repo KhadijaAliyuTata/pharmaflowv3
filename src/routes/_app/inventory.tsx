@@ -82,11 +82,14 @@ import {
 import { daysUntil, formatCount, formatDate, formatNaira } from '~/domain/money';
 import { formatStockQuantity } from '~/domain/units';
 import { validateSellingPrice } from '~/domain/pricing';
+import { withReceiptTerms } from '~/domain/receipt-terms';
 import { marginPercent, searchMedicines, sellableQuantity, stockStatus } from '~/domain/selectors';
 import type { Medicine, MedicineBatch, StockStatus } from '~/domain/types';
-import { usePharmacy, usePharmacyActions } from '~/store/pharmacy';
+import { usePharmacyActions } from '~/store/pharmacy';
+import { useCatalogueCosts } from '~/hooks/use-catalogue-costs';
 import { useMedicines } from '~/hooks/use-medicines';
 import { useIsOwner } from '~/hooks/use-is-owner';
+import { useSuppliers } from '~/hooks/use-suppliers';
 import {
   CATALOGUE_WRITE_UNAVAILABLE,
   catalogueWritesAvailable,
@@ -148,15 +151,25 @@ function Inventory() {
   // Catalogue comes from Supabase in live mode; see useMedicines for why it has no
   // localStorage fallback there.
   const {
-    medicines,
+    medicines: catalogue,
     loading: catalogueLoading,
     error: catalogueError,
     refresh: refreshCatalogue,
   } = useMedicines();
-  const suppliers = usePharmacy((state) => state.suppliers);
+  // The same live supplier source Stock Receiving uses. In demo it falls back to
+  // the seeded store, so the filter and names still work without a backend.
+  const { suppliers } = useSuppliers();
   // Authoritative: `pf_is_owner()` resolves branch_memberships.role. Display
   // gating only — `profiles.role` is a cache and RLS is the boundary.
   const isOwner = useIsOwner();
+  // Cost is not selectable on `medicines`; the owner-only views are the read
+  // path. A receipt stores its supplier and cost on the lot, so bridge those
+  // persisted terms onto the product row for display only.
+  const { medicineCosts, batchCosts } = useCatalogueCosts(isOwner);
+  const medicines = useMemo(
+    () => withReceiptTerms(catalogue, { medicineCosts, batchCosts }),
+    [catalogue, medicineCosts, batchCosts],
+  );
 
   const [query, setQuery] = useSeedQuery(q);
   const [status, setStatus] = useState<StatusFilter>('all');
@@ -540,7 +553,7 @@ function Inventory() {
                         </TableCell>
                         <TableCell className="max-w-40">
                           <span className="block truncate text-muted-foreground">
-                            {supplierNames.get(medicine.supplier) ?? medicine.supplier}
+                            {(supplierNames.get(medicine.supplier) ?? medicine.supplier) || '—'}
                           </span>
                         </TableCell>
                         <TableCell onClick={(event) => event.stopPropagation()}>
@@ -594,6 +607,7 @@ function Inventory() {
       <ProductSheet
         medicine={selected}
         isOwner={isOwner}
+        supplierNames={supplierNames}
         onClose={() => setSelectedId(null)}
         onAction={openAction}
       />
@@ -777,11 +791,13 @@ function RowActions({
 function ProductSheet({
   medicine,
   isOwner,
+  supplierNames,
   onClose,
   onAction,
 }: {
   medicine: Medicine | null;
   isOwner: boolean;
+  supplierNames: Map<string, string>;
   onClose: () => void;
   onAction: (pending: Pending) => void;
 }) {
@@ -832,7 +848,14 @@ function ProductSheet({
                 <Fact label="Category" value={medicine.category} />
                 <Fact label="NAFDAC" value={medicine.nafdacRegNumber ?? 'Not recorded'} />
                 <Fact label="Manufacturer" value={medicine.manufacturer ?? 'Not recorded'} />
-                <Fact label="Supplier" value={medicine.supplier} />
+                <Fact
+                  label="Supplier"
+                  value={
+                    medicine.supplier
+                      ? (supplierNames.get(medicine.supplier) ?? medicine.supplier)
+                      : 'Not recorded'
+                  }
+                />
                 <Fact label="Price / unit" value={formatNaira(medicine.pricePerBaseUnit)} />
                 {isOwner && (
                   <Fact
@@ -907,7 +930,10 @@ function ProductSheet({
                             <TableCell>
                               <p className="font-medium">{batch.batchNumber}</p>
                               <p className="truncate text-xs text-muted-foreground">
-                                {batch.recallReason ?? batch.supplier}
+                                {batch.recallReason ??
+                                  (batch.supplier
+                                    ? (supplierNames.get(batch.supplier) ?? batch.supplier)
+                                    : 'Supplier not recorded')}
                               </p>
                             </TableCell>
                             <TableCell

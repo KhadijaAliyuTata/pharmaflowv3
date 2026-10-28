@@ -15,7 +15,7 @@ import type {
   StockReceipt,
   User,
 } from './types';
-import { add, createId, isoTimestamp, money, multiply, subtract, sum } from './money';
+import { add, createId, isoDate, isoTimestamp, money, multiply, subtract, sum } from './money';
 import { canApprovePricing, can } from './state';
 import {
   hasCost,
@@ -31,6 +31,14 @@ import {
   findUnit,
   validateUnitHierarchy,
 } from './units';
+import {
+  blockingDuplicates,
+  defaultProductExpiryDate,
+  findProductDuplicates,
+  prescriptionStatusForClass,
+  validateNewProductDraft,
+  type NewProductInput,
+} from './product-create';
 
 /**
  * Every mutation in the app.
@@ -1059,6 +1067,102 @@ export function updateUnits(
 }
 
 /* ------------------------------------------------------------ safety locks */
+
+/**
+ * Add a product to the demo catalogue.
+ *
+ * The live equivalent is `pf_create_medicine`; both callers validate with
+ * `product-create.ts` first. This operation exists so the same receiving flow
+ * works in a demo build, where the seeded store genuinely is the pharmacy. It
+ * creates a catalogue row and no stock — a receipt is still a separate write.
+ */
+export function createMedicine(state: AppState, input: NewProductInput): Result<Medicine> {
+  const user = state.currentUser;
+  if (!can(user.role, 'receive_stock')) {
+    return fail('Your role cannot add products');
+  }
+
+  // Re-run the shared rules rather than trusting the dialog. The operation is
+  // part of the domain surface and may be called without a form.
+  const checked = validateNewProductDraft({
+    name: input.name,
+    genericName: input.genericName,
+    strength: input.strength,
+    dosageForm: input.dosageForm,
+    barcode: input.barcode ?? '',
+    unitName: input.unitName,
+    prescriptionClass: input.prescriptionClass,
+    sellingPrice: String(input.sellingPrice),
+  });
+  if (!checked.ok) {
+    return fail(Object.values(checked.errors).filter(Boolean).join(' '));
+  }
+  const value = checked.value;
+
+  const duplicates = findProductDuplicates(state.medicines, {
+    ...value,
+    barcode: value.barcode ?? '',
+  });
+  const blocking = blockingDuplicates(duplicates);
+  const blockedBy = blocking[0];
+  if (blockedBy) {
+    const match = blockedBy.medicine;
+    return fail(
+      `That product already exists: ${match.name} · ${match.strength}. Select it instead of creating a duplicate.`,
+    );
+  }
+
+  // An assistant may receive the product but may not set its price. The database
+  // drops a non-owner price in the same way, so the two modes agree.
+  const price = canApprovePricing(user.role) ? value.sellingPrice : 0;
+
+  const medicine: Medicine = {
+    id: createId('med'),
+    ...(value.barcode ? { barcode: value.barcode } : {}),
+    name: value.name,
+    genericName: value.genericName,
+    strength: value.strength,
+    dosageForm: value.dosageForm,
+    category: '',
+    units: [
+      {
+        key: value.unitKey,
+        name: value.unitName,
+        multiplier: 1,
+        sellingPrice: price,
+      },
+    ],
+    totalQuantity: 0,
+    lowStockThreshold: 0,
+    expiryDate: defaultProductExpiryDate(),
+    supplier: '',
+    purchaseDate: isoDate(),
+    ...(canApprovePricing(user.role) ? { costPerBaseUnit: 0 } : {}),
+    pricePerBaseUnit: price,
+    batches: [],
+    commonUse: '',
+    storage: '',
+    prescriptionStatus: prescriptionStatusForClass(value.prescriptionClass),
+    warnings: [],
+    isBrand: false,
+    doNotSell: { active: false },
+    averageDailySales: 0,
+  };
+
+  const next = withAudit(
+    { ...state, medicines: [...state.medicines, medicine] },
+    user,
+    'product_created',
+    `Added ${medicine.name} · ${medicine.strength} to the catalogue`,
+    {
+      medicineId: medicine.id,
+      unitKey: value.unitKey,
+      ...(medicine.barcode ? { barcode: medicine.barcode } : {}),
+    },
+  );
+
+  return ok(next, medicine);
+}
 
 export function setSafetyLock(
   state: AppState,

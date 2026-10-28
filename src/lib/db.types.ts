@@ -1615,6 +1615,23 @@ export type Database = {
         }[];
       };
       /**
+       * Create one catalogue product for the caller's current branch.
+       *
+       * Additive, from 20261027120000_create_medicine. Adds no stock, batch or
+       * receipt. The branch is resolved server-side; duplicate
+       * name+strength+form and duplicate barcode are refused; a non-owner's
+       * selling price is written as zero.
+       */
+      pf_create_medicine: {
+        Args: { p_product: Json };
+        Returns: {
+          id: string;
+          medicine_id: string;
+          name: string;
+          branch_id: string;
+        };
+      };
+      /**
        * The receiving write path, from 20261012170000_receive_stock.
        *
        * SECURITY DEFINER, and the only way a receipt, a lot and the movement that

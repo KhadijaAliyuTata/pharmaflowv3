@@ -39,6 +39,7 @@ const NEEDED_BY_AUTHENTICATED = {
   pf_create_return: 'rpc',
   pf_review_return: 'rpc',
   pf_update_medicine_price: 'rpc',
+  pf_create_medicine: 'rpc',
 };
 
 /** Data-changing functions that must never be directly callable by anyone. */

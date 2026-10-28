@@ -496,6 +496,7 @@ export type AuditAction =
   | 'void'
   | 'discount'
   | 'stock_receipt'
+  | 'product_created'
   | 'pricing_approval'
   | 'price_change'
   | 'unit_change'

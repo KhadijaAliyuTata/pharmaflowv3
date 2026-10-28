@@ -118,20 +118,36 @@ check(
   'the views filter on pf_is_owner() and return zero rows otherwise',
 );
 
-section('the write path is absent rather than present-and-broken');
+section('the catalogue write path is scoped and RPC-backed');
 
 check(
-  'createMedicine is no longer exported',
-  !/export async function createMedicine\s*\(/.test(catalogCode),
-  'writes are a later phase; a callable-looking write that always 42501s is worse',
+  'the one create path goes through pf_create_medicine',
+  /export async function createMedicine\s*\(/.test(catalogCode) &&
+    /\.rpc\('pf_create_medicine'/.test(catalogCode),
+  'the RPC resolves the branch; a browser-supplied branch_id would make tenant isolation a frontend promise',
 );
 check(
-  'updateMedicine is no longer exported',
+  'createMedicine does not insert directly into medicines',
+  !/from\('medicines'\)[\s\S]{0,240}?\.insert\s*\(/.test(catalogCode),
+  'a direct insert needs a branch_id the caller cannot be trusted to choose',
+);
+check(
+  'createMedicine re-reads with the explicit catalogue column list',
+  /return getMedicine\(id\)/.test(catalogCode) &&
+    !/from\('medicines'\)[\s\S]{0,240}?\.select\(\s*['"`]\*/.test(catalogCode),
+  'a bare select after insert expands to cost_per_base_unit, which authenticated cannot read',
+);
+check(
+  'updateMedicine is still absent',
   !/export async function updateMedicine\s*\(/.test(catalogCode),
+  'price updates keep their separate owner-only RPC; there is no general catalogue update',
 );
 check(
-  'the absence is explained where a reader will look',
-  /not part of the read-only migration/.test(catalog),
+  'the scoped write and its limits are explained where a reader will look',
+  /pf_create_medicine/.test(catalog) &&
+    /branch_id/.test(catalog) &&
+    /no default/.test(catalog) &&
+    /Stock is deliberately not created here/.test(catalog),
 );
 
 section('no service-role or legacy key is introduced');
@@ -549,9 +565,17 @@ check(
     /catalogueWritesAvailable/.test(unitEditorSrc),
 );
 check(
-  'the local store/action layer exposes no general medicine create or update action',
-  !/\b(?:createMedicine|updateMedicine)\b/.test(localWritesCode),
-  'only the scoped price, stock, lock and recall actions remain local; updateMedicinePrice is a separate owner RPC',
+  'the local store exposes no general medicine update action',
+  !/\bupdateMedicine\b/.test(localWritesCode),
+  'a general local edit would silently diverge from the live database; price updates have a separate owner RPC',
+);
+check(
+  'the demo create action is permission-checked and shares the dialog rules',
+  /\bcreateMedicine\b/.test(localWritesCode) &&
+    /can\(user\.role, 'receive_stock'\)/.test(localWritesCode) &&
+    /validateNewProductDraft/.test(localWritesCode) &&
+    /findProductDuplicates/.test(localWritesCode),
+  'the live path uses pf_create_medicine; the demo operation still validates and refuses duplicates',
 );
 check(
   'the read behaviour is untouched by the write gate',
