@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
+import { useActiveBranch } from '~/lib/supabase/branch-context';
 import { isOwner as queryIsOwner } from '~/lib/supabase/tenant';
 import { isSupabaseConfigured } from '~/lib/supabase/client';
-import { isDemoMode } from '~/lib/session';
+import { isDemoMode, useSession } from '~/lib/session';
 import { usePharmacy } from '~/store/pharmacy';
 
 /**
@@ -43,13 +44,42 @@ export function useIsOwner(): boolean {
   // branch is dead code and cannot ship.
   const demoRole = usePharmacy((state) => state.currentUser.role);
   const demo = isDemoMode();
+  const session = useSession();
+  const branch = useActiveBranch();
 
+  // Re-ask when the session or the active branch changes. On a live reload this
+  // hook mounts before `adoptSession` and `resolveActiveBranch` finish; asking
+  // once at mount would cache the anonymous/provisional answer as `false`, and
+  // the owner would keep an attendant's Add Staff affordances until a manual
+  // refresh. `pf_is_owner()` is scoped to the active branch, so the branch id is
+  // part of the question, not just the user.
   useEffect(() => {
     if (demo || !isSupabaseConfigured()) {
       setOwner(null);
       return;
     }
+
+    if (session.status !== 'authenticated' || session.offline || !session.user) {
+      setOwner(null);
+      return;
+    }
+
+    // `pf_is_owner()` reads `pf_current_branch()`. Before it resolves there is no
+    // branch to ask about, and during a branch switch the old answer is stale.
+    if (branch.status === 'idle' || branch.status === 'loading') {
+      setOwner(null);
+      return;
+    }
+
+    // A cached branch is not a fresh authorisation check; an owner-only
+    // affordance must stay closed until the server confirms the branch again.
+    if (branch.source === 'cache' || branch.status === 'no-branches' || branch.status === 'error') {
+      setOwner(false);
+      return;
+    }
+
     let cancelled = false;
+    setOwner(null);
     void (async () => {
       // `isOwner` returns false on any error, so a failed check resolves to the
       // attendant view. That is the direction to fail in.
@@ -59,7 +89,16 @@ export function useIsOwner(): boolean {
     return () => {
       cancelled = true;
     };
-  }, [demo]);
+  }, [
+    demo,
+    session.status,
+    session.offline,
+    session.user?.id,
+    session.user?.role,
+    branch.status,
+    branch.currentBranchId,
+    branch.source,
+  ]);
 
   if (demo) return demoRole === 'owner';
   return owner ?? false;

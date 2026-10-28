@@ -63,7 +63,7 @@ export const Route = createFileRoute('/')({
 });
 
 function Login() {
-  const { status, user } = useSession();
+  const { status } = useSession();
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => setMounted(true), []);
@@ -78,7 +78,10 @@ function Login() {
   // redirect. The effect that resolves the session runs in the same commit as
   // this one, so a signed-in user does not normally see either.
   if (status === 'authenticated') {
-    return <Navigate to={user?.role === 'assistant' ? '/pos' : '/dashboard'} />;
+    // The dashboard is role-aware. Both roles land there, so an attendant gets
+    // the counter dashboard rather than being sent to the till screen or left
+    // on the owner overview.
+    return <Navigate to="/dashboard" />;
   }
   if (status === 'loading' && mounted) return <LoginSkeleton />;
 
@@ -106,7 +109,7 @@ function Login() {
               <h1 className="text-xl font-semibold tracking-tight">Sign in</h1>
             </div>
 
-            <StaffSignInForm />
+            <StaffSignInForm ready={mounted} />
           </div>
         )}
       </main>
@@ -168,7 +171,7 @@ const staffSchema = z.object({
 
 type StaffValues = z.infer<typeof staffSchema>;
 
-function StaffSignInForm() {
+function StaffSignInForm({ ready }: { ready: boolean }) {
   const form = useForm<StaffValues>({
     resolver: zodResolver(staffSchema),
     defaultValues: { email: '', password: '', remember: true },
@@ -190,7 +193,18 @@ function StaffSignInForm() {
 
   return (
     <Form {...form}>
-      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4" noValidate>
+      {/*
+        The native form is a fallback that must fail safe. Before hydration the
+        React submit handler does not exist, and a bare GET form puts the typed
+        password in the query string. `method="post"` keeps it out of the URL,
+        and the submit button stays disabled until the effect above has run.
+      */}
+      <form
+        onSubmit={form.handleSubmit(onSubmit)}
+        method="post"
+        className="space-y-4"
+        noValidate
+      >
         <FormField
           control={form.control}
           name="email"
@@ -237,7 +251,7 @@ function StaffSignInForm() {
         />
 
         <div className="flex items-center justify-between gap-2">
-          <Button type="submit" className="h-9">
+          <Button type="submit" className="h-9" disabled={!ready}>
             Sign in
           </Button>
           <ForgotPassword />
@@ -263,7 +277,10 @@ function DemoSignIn() {
   const enter = (account: (typeof DEMO_ACCOUNTS)[number]) => {
     if (account.role === 'owner' || account.role === 'assistant') {
       enterDemoSession(account.role);
-      void navigate({ to: account.role === 'owner' ? '/dashboard' : '/pos' });
+      // The dashboard chooses the owner or counter layout from the role. Sending
+      // the attendant to `/pos` skipped the dashboard entirely, and sending them
+      // to `/dashboard` without a role-aware dashboard showed owner content.
+      void navigate({ to: '/dashboard' });
       return;
     }
     if (account.role === 'customer') {

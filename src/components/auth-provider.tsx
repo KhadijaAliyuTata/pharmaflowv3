@@ -1,5 +1,5 @@
 import { useEffect, type ReactNode } from 'react';
-import { startSession } from '~/lib/session';
+import { startSession, useSession } from '~/lib/session';
 import { resolveActiveBranch } from '~/lib/supabase/branch-context';
 import { syncLiveTenant } from '~/lib/tenant-sync';
 import { useHydratePharmacy } from '~/store/pharmacy';
@@ -21,12 +21,10 @@ import { useHydratePharmacy } from '~/store/pharmacy';
  * plainly rather than a blank screen.
  */
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const session = useSession();
+
   useEffect(() => {
-    void (async () => {
-      startSession();
-      await resolveActiveBranch();
-      await syncLiveTenant();
-    })();
+    startSession();
 
     // A cached branch is usable for the POS safety net while the server is
     // unreachable, but it is not proof of current membership or role. Re-ask the
@@ -39,6 +37,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     window.addEventListener('online', onOnline);
     return () => window.removeEventListener('online', onOnline);
   }, []);
+
+  // Resolve the branch when a session actually exists, not just once at mount.
+  // `startSession` adopts a session asynchronously, and a visitor who signs in
+  // from the login form was anonymous at mount. Resolving only at mount left that
+  // new owner with no active branch until a manual refresh: the branch name was
+  // missing, `useIsOwner()` answered false, and the Add Staff control stayed
+  // hidden. Re-run when the authenticated user changes, and skip the provisional
+  // offline profile so a cached role is never treated as a fresh authorisation.
+  useEffect(() => {
+    if (session.status !== 'authenticated' || session.offline || !session.user) {
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      await resolveActiveBranch();
+      if (!cancelled) await syncLiveTenant();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [session.status, session.offline, session.user?.id]);
 
   useHydratePharmacy();
 

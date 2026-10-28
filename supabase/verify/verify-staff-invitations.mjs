@@ -1141,6 +1141,21 @@ check(
   `found ${removed} membership_removed row(s); the removal should have produced one`,
 );
 
+const leaverActivation = await query(
+  db,
+  `select count(*)::int as n
+     from audit_events
+    where branch_id = $1
+      and action = 'pharmacy_activated'
+      and actor_id = $2`,
+  [BRANCH_A, LEAVER],
+);
+check(
+  'an assistant acceptance is not recorded as an owner activation',
+  leaverActivation[0]?.n === 0,
+  'only an owner invitation may activate the pharmacy or claim an owner arrived',
+);
+
 /* ------------------------------------------------------------------- revoke */
 
 section('removal does not delete the invitation record');

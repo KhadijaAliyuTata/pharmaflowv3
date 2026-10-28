@@ -348,7 +348,7 @@ section('the source matches this decision table');
     /\/\*[\s\S]*?\*\//g,
     ' ',
   ).replace(/^[ \t]*\/\/.*$/gm, ' ');
-  const loginSrc = (await Bun.file(ROOT + 'src/routes/login.tsx').text())
+  const loginSrc = (await Bun.file(ROOT + 'src/routes/index.tsx').text())
     .replace(/\/\*[\s\S]*?\*\//g, ' ')
     .replace(/^[ \t]*\/\/.*$/gm, ' ');
 
@@ -371,26 +371,42 @@ section('the source matches this decision table');
     '"Act as" is a self-service role change and must not appear on live Supabase',
   );
   check(
-    'the login screen seeds no credentials unless demo mode is on',
+    'the demo account picker renders only in demo mode',
     guardedBy(loginSrc, '<DemoAccounts'),
-    'DemoAccounts fills the form with a seeded email and password "demo"',
+    'DemoAccounts exposes the seeded accounts; it must not appear on live Supabase',
   );
-  // "Any password works" is not inline at the call site — it is inside the body of the
-  // `DemoAccounts` component, some distance below it. Asserting a guard near the string
-  // would be wrong twice over: it cannot reach, and it would pass for the wrong reason.
-  // The property that actually governs rendering is that the string exists ONLY inside
-  // `DemoAccounts`, and that the component has exactly one mount point, which is guarded.
-  const demoAccountsBody = loginSrc.slice(loginSrc.indexOf('function DemoAccounts'));
+  // The current login screen has no "any password works" text: demo builds replace
+  // the password form with the account picker instead of advertising a fake password.
+  // The security property is unchanged — the picker's copy lives ONLY inside
+  // `DemoAccounts`, and the component has exactly one mount point, which is guarded.
+  const demoAccountsBody = loginSrc.slice(
+    loginSrc.indexOf('function DemoAccounts'),
+    loginSrc.indexOf('function ForgotPassword'),
+  );
   check(
-    'the "any password works" hint exists only inside DemoAccounts',
-    demoAccountsBody.includes('Any password works') &&
-      loginSrc.split('Any password works').length === 2,
+    'the demo account picker copy exists only inside DemoAccounts',
+    demoAccountsBody.includes('One click. No password.') &&
+      loginSrc.split('One click. No password.').length === 2,
     'one occurrence, and it is inside the component, so the call-site guard covers it',
   );
   check(
     'and DemoAccounts is mounted in exactly one place, which is guarded',
     loginSrc.split('<DemoAccounts').length === 2 && guardedBy(loginSrc, '<DemoAccounts'),
     'a second mount point would be an unguarded route into the same text',
+  );
+
+  // The whole demo screen, not just the account list, must sit on the demo branch.
+  // If `DemoSignIn` were mounted live, a deployment with no credentials could still
+  // show a screen that looks like authentication while offering none.
+  const demoSignInAt = loginSrc.indexOf('<DemoSignIn');
+  const demoSignInMount = loginSrc.slice(Math.max(0, demoSignInAt - 400), demoSignInAt);
+  check(
+    'the demo sign-in screen is mounted once, from the isDemoMode() branch',
+    demoSignInAt > 0 &&
+      loginSrc.split('<DemoSignIn').length === 2 &&
+      /const demoMode = isDemoMode\(\)/.test(demoSignInMount) &&
+      /demoMode \?/.test(demoSignInMount),
+    'a second mount point or a non-demo branch would expose the fake sign-in',
   );
   check(
     'no demo-only surface is gated on the bare build flag',

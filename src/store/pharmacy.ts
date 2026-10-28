@@ -101,7 +101,19 @@ class PharmacyStore {
 
       // Merge onto the seed so a state written by an older build is still
       // usable after this one adds a collection.
-      this.state = { ...createSeedState(), ...parsed };
+      //
+      // `currentUser` is the exception: the session layer owns it. Hydration and
+      // `startSession` are separate effects, so whichever runs second used to
+      // win. With a role key and a persisted state that disagreed (for example,
+      // switching role and refreshing before the debounced state write landed),
+      // the header showed the new role while screens still read the old actor
+      // from the store. Keep the actor the session already resolved; the seeded
+      // collections can still come from storage.
+      this.state = {
+        ...createSeedState(),
+        ...parsed,
+        currentUser: this.state.currentUser,
+      };
       this.emit();
     } catch {
       // Corrupt payload. Start clean rather than leaving the app unusable.
@@ -254,6 +266,13 @@ export function usePharmacyActions() {
     [],
   );
 
+  /** Catalogue creation in demo mode. Live mode writes through pf_create_medicine. */
+  const createMedicine = useCallback(
+    (input: Parameters<typeof ops.createMedicine>[1]) =>
+      apply(ops.createMedicine(store.getState(), input)),
+    [],
+  );
+
   const approvePricing = useCallback(
     (receiptId: string, cost: number, price: number) =>
       apply(ops.approvePricing(store.getState(), receiptId, cost, price)),
@@ -327,6 +346,7 @@ export function usePharmacyActions() {
     checkout,
     voidSale,
     receiveStock,
+    createMedicine,
     approvePricing,
     updatePrice,
     updateUnitPrice,
@@ -365,7 +385,24 @@ export function getPharmacyUsers(): User[] {
  */
 export function setPharmacyCurrentUser(user: User): void {
   const state = store.getState();
-  if (state.currentUser.id === user.id) return;
+  const current = state.currentUser;
+  // Identity is the user id, but the role and the display fields can change for
+  // the same id. A live reload paints the cached profile first with the role
+  // deliberately downgraded to assistant; the server-confirmed profile then
+  // arrives for the same id. Comparing only the id dropped that second write, so
+  // an owner kept a store actor marked assistant and every screen that reads
+  // `currentUser.role` disagreed with the session and `pf_is_owner()`.
+  if (
+    current.id === user.id &&
+    current.name === user.name &&
+    current.email === user.email &&
+    current.role === user.role &&
+    current.phone === user.phone &&
+    current.licenseNumber === user.licenseNumber &&
+    current.canApprovePricing === user.canApprovePricing
+  ) {
+    return;
+  }
   store.setState({ ...state, currentUser: user });
 }
 

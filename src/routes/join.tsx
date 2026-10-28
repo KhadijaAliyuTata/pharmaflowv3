@@ -42,6 +42,9 @@ export const Route = createFileRoute('/join')({
 function Join() {
   const { status } = useSession();
   const { token: fromLink } = Route.useSearch();
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => setMounted(true), []);
 
   const [token, setToken] = useState(fromLink ?? '');
   const [email, setEmail] = useState('');
@@ -79,7 +82,12 @@ function Join() {
    * Signed in with no code, there is nothing to do here and the old redirect is
    * correct.
    */
-  if (status === 'authenticated' || signedInWithCode) {
+  // The session is client-only (Supabase keeps it in storage), so the server
+  // cannot know whether this visitor is already signed in. Branching on
+  // `status` during the first client render made the two trees disagree: the
+  // server painted the join form and the client painted the redeem step. Paint
+  // the anonymous form on both until mount, then let the real session decide.
+  if (mounted && (status === 'authenticated' || signedInWithCode)) {
     if (!token.trim()) return <Navigate to="/dashboard" />;
     return <RedeemScreen token={token.trim()} />;
   }
