@@ -223,6 +223,11 @@ export function AppSidebar({
                           // action — `switchRole` throws outside a demo session.
                           const next: StaffRole = value;
                           switchRole(next);
+                          // The dashboard is role-specific. Staying on the old
+                          // screen would keep owner content mounted after
+                          // switching to Assistant (or hide the owner view after
+                          // switching back), so land on the role's own dashboard.
+                          void navigate({ to: '/dashboard' });
                           toast.success(`Viewing as ${ROLE_LABEL[next]}`);
                         }}
                       >

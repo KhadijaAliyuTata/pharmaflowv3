@@ -34,6 +34,7 @@ import {
   TableHeader,
   TableRow,
 } from '~/components/ui/table';
+import { AssistantDashboard } from '~/components/app/assistant-dashboard';
 import { OwnerHeader } from '~/components/app/owner-header';
 import {
   MaybeMoney,
@@ -61,13 +62,40 @@ import { useAuditEvents } from '~/hooks/use-audit-events';
 import { useMedicines } from '~/hooks/use-medicines';
 import { useIsOwner } from '~/hooks/use-is-owner';
 import { useSales } from '~/hooks/use-sales';
+import { useSession } from '~/lib/session';
+import {
+  effectiveRole,
+  roleForBranch,
+  useActiveBranch,
+} from '~/lib/supabase/branch-context';
 import { useCurrentUser, usePharmacy, usePharmacyState } from '~/store/pharmacy';
 
 export const Route = createFileRoute('/_app/dashboard')({
-  component: Dashboard,
+  component: DashboardRoute,
 });
 
 const ALL = 'all';
+
+/**
+ * Choose the dashboard for the role that is actually signed in.
+ *
+ * The two views are separate components so the owner-only audit, cost and
+ * valuation queries are never mounted for an attendant. The role comes from the
+ * same effective-role rule as the shell and sidebar; using the profile cache
+ * directly would let a stale role choose the wrong screen.
+ */
+function DashboardRoute() {
+  const { user } = useSession();
+  const branch = useActiveBranch();
+  const role = effectiveRole(
+    branch.source,
+    roleForBranch(branch.currentBranchId),
+    user?.role ?? null,
+    'owner',
+  );
+
+  return role === 'owner' ? <Dashboard /> : <AssistantDashboard />;
+}
 
 /**
  * The owner dashboard.
@@ -198,7 +226,7 @@ function Dashboard() {
           <ArrowRight />
         </Button>
         <p className="text-xs text-muted-foreground">
-          {user.role === 'owner'
+          {isOwner
             ? 'Owner view · cost and margin figures are shown.'
             : 'Volume view · cost and margin figures are hidden.'}
         </p>

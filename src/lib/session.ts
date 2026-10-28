@@ -853,6 +853,14 @@ export function switchRole(role: User['role']): void {
   }
   const user = DEMO_USERS.find((candidate) => candidate.role === role);
   if (!user) return;
+  // The role key is what `startSession` reads on reload. Writing only the
+  // profile cache would leave the previous role in the key, so a tester who
+  // switched to Assistant and refreshed would silently become the Owner again.
+  try {
+    window.localStorage.setItem(DEMO_ROLE_KEY, role);
+  } catch {
+    /* private mode: the in-memory switch still works for this page */
+  }
   writeCache(user);
   setPharmacyCurrentUser(user);
   emit({ user, status: 'authenticated', offline: false });

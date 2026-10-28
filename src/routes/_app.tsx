@@ -11,6 +11,7 @@ import { SidebarInset, SidebarProvider } from '~/components/ui/sidebar';
 import { Toaster } from '~/components/ui/sonner';
 import { toast } from 'sonner';
 import { useHotkeys } from '~/lib/use-hotkeys';
+import { findNavItem } from '~/lib/nav';
 import { peekSession, useSession } from '~/lib/session';
 import { signOutSafely } from '~/lib/sign-out';
 import {
@@ -44,16 +45,30 @@ export const Route = createFileRoute('/_app')({
   // so the component below repeats the check once `status` is known. That
   // second check is the only path that can show the shell to a signed-out
   // user, and only for the one paint before the effect resolves.
-  beforeLoad: () => {
-    if (peekSession().status === 'anonymous') {
+  beforeLoad: ({ location }) => {
+    const session = peekSession();
+    if (session.status === 'anonymous') {
       throw redirect({ to: '/' });
+    }
+
+    // A role restriction is not only a hidden sidebar link. A bookmark or typed
+    // URL reaches the same route, so owner-only screens reject it here before
+    // they render. A cached/offline session is skipped because its role is
+    // deliberately downgraded and still provisional; those screens gate their
+    // own contents and RLS is the authority in every case.
+    const role = session.user?.role ?? null;
+    if (role && !session.offline) {
+      const item = findNavItem(location.pathname);
+      if (item?.roles && !item.roles.includes(role)) {
+        throw redirect({ to: '/dashboard' });
+      }
     }
   },
   component: AppLayout,
 });
 
 function AppLayout() {
-  const { user, status } = useSession();
+  const { user, status, offline } = useSession();
   const branch = useActiveBranch();
   const navigate = useNavigate();
   const location = useLocation();
@@ -82,6 +97,21 @@ function AppLayout() {
     'owner',
   ) as StaffRole;
 
+  // The router `beforeLoad` above sees the session as it was before `startSession`
+  // ran. On a direct load or refresh, the demo key has not been read yet, so the
+  // shell must repeat the check once the session resolves. Without this, typing an
+  // owner-only URL as the Assistant rendered that screen before the role arrived.
+  // Only a server-confirmed session may be rejected from a route. A live reload
+  // paints the cached profile as an offline/assistant placeholder before
+  // `adoptSession` returns the real owner. Redirecting during that window sent an
+  // owner who opened `/staff` directly back to `/dashboard`; the guard now waits
+  // for the real role, and the screen itself withholds its contents meanwhile.
+  const confirmed = status === 'authenticated' && !offline;
+  const requestedItem = findNavItem(location.pathname);
+  const restricted = Boolean(
+    confirmed && requestedItem?.roles && role && !requestedItem.roles.includes(role),
+  );
+
   // ⌘K / Ctrl+K opens the screen palette; "/" opens record search. The hook skips
   // editable targets, so neither hijacks typing inside the POS cart or a form.
   useHotkeys({
@@ -98,6 +128,10 @@ function AppLayout() {
       void navigate({ to: '/', replace: true });
     }
   }, [status, navigate]);
+
+  if (restricted) {
+    return <Navigate to="/dashboard" replace />;
+  }
 
   // Below the hooks on purpose: an early return above them is a conditional
   // hook, and React tears the whole route down when the session resolves.

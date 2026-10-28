@@ -78,7 +78,7 @@ function InvestorDemoHub() {
             title="Pharmacy Attendant"
             blurb="The counter view: search stock, record a sample sale, receive stock, and see only what a counter role is permitted to see — never purchase prices or margins."
             features={['Record a sample sale', 'Receiving & expiry lists', 'Role-restricted information']}
-            onClick={() => enter('assistant', '/pos')}
+            onClick={() => enter('assistant', '/dashboard')}
             accent="#2A932C"
           />
           <DemoCard

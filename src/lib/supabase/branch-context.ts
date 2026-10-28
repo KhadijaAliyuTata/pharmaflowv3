@@ -108,6 +108,10 @@ const UNRESOLVED: ActiveBranchState = {
  * shape so components need no branch of their own. `role` is left off here — the
  * demo session carries its own role — and `roleForBranch` accounts for that.
  */
+function demoRole(): StaffRole {
+  return peekSession().user?.role === 'assistant' ? 'assistant' : 'owner';
+}
+
 function demoState(): ActiveBranchState {
   const branch: Branch = SEED_BRANCH;
   const seeded: AvailableBranch = {
@@ -128,7 +132,7 @@ function demoState(): ActiveBranchState {
     premises_number: branch.premisesNumber ?? null,
     created_at: '',
     updated_at: '',
-    role: 'owner',
+    role: demoRole(),
     isDefault: true,
   };
   return {
@@ -456,6 +460,10 @@ export async function fetchMyBranchStatus(): Promise<PharmacyStatus | null> {
 /** The role this session holds at a given branch, or null if not permitted. */
 export function roleForBranch(branchId: string | null): StaffRole | null {
   if (!branchId) return null;
+  // A role switch updates the session, not the branch snapshot. Read the demo
+  // session here so the sidebar and shell change on the same render as the
+  // account control, instead of keeping the role the branch was built with.
+  if (isDemoMode()) return demoRole();
   return current.availableBranches.find((b) => b.id === branchId)?.role ?? null;
 }
 
